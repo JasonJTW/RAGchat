@@ -52,7 +52,8 @@ paths:
       summary: Log in to the admin
       description: >
         Checks the credentials against `ADMIN_USERNAME` (default `admin`) and
-        `ADMIN_PASSWORD`. While `ADMIN_PASSWORD` is unset nobody can log in.
+        `ADMIN_PASSWORD`. While `ADMIN_PASSWORD` is unset nobody can log in
+        (503).
         Sessions live in memory, so restarting the server logs the admin out.
       requestBody:
         required: true
@@ -82,6 +83,12 @@ paths:
                 $ref: "#/components/schemas/Error"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "503":
+          description: "`ADMIN_PASSWORD` is not set, so nobody can log in"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/documents:
     get:
       operationId: listDocuments

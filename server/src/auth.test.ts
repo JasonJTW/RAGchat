@@ -75,13 +75,15 @@ describe("POST /api/login", () => {
     expect(login.status).toBe(400);
   });
 
-  it("lets nobody in while ADMIN_PASSWORD is unset", async () => {
+  it("lets nobody in while ADMIN_PASSWORD is unset, and says so", async () => {
     vi.stubEnv("ADMIN_PASSWORD", "");
 
     const login = await request(app)
       .post("/api/login")
       .send({ username: "admin", password: "" });
 
-    expect(login.status).toBe(401);
+    expect(login.status).toBe(503);
+    expect(login.headers["set-cookie"]).toBeUndefined();
+    expect(login.body).toEqual({ error: "ADMIN_PASSWORD is not set" });
   });
 });

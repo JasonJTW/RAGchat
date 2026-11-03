@@ -25,6 +25,27 @@ test("a wrong password shows an error and stays on the login screen", async ({
   await expect(page).toHaveURL(/\/admin\/login$/);
 });
 
+test("the login screen says when ADMIN_PASSWORD is not set", async ({
+  page,
+}) => {
+  // The E2E server always has a password; play the server that has none.
+  await page.route("**/api/login", (route) =>
+    route.fulfill({
+      status: 503,
+      json: { error: "ADMIN_PASSWORD is not set" },
+    }),
+  );
+  await page.goto("/admin/login");
+
+  await page.getByRole("textbox", { name: "帳號" }).fill(ADMIN_USERNAME);
+  await page.getByLabel("密碼").fill("anything");
+  await page.getByRole("button", { name: "登入" }).click();
+
+  await expect(page.getByRole("main").getByRole("alert")).toHaveText(
+    "尚未設定管理員密碼，請在 .env 設定 ADMIN_PASSWORD 後重啟伺服器",
+  );
+});
+
 test("the right password opens the document list", async ({ page }) => {
   await logIn(page);
 

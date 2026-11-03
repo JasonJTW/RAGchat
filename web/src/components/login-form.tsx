@@ -31,6 +31,12 @@ export function LoginForm() {
         setError("帳號或密碼錯誤");
         return;
       }
+      if (res.status === 503) {
+        setError(
+          "尚未設定管理員密碼，請在 .env 設定 ADMIN_PASSWORD 後重啟伺服器",
+        );
+        return;
+      }
       if (!res.ok) throw new Error(`login failed: ${res.status}`);
       router.replace("/admin");
     } catch {

@@ -16,15 +16,18 @@ function same(a: string, b: string): boolean {
 
 const Credentials = z.object({ username: z.string(), password: z.string() });
 
+/** True while `ADMIN_PASSWORD` is unset: nobody can log in. */
+export function adminPasswordMissing(): boolean {
+  return !process.env.ADMIN_PASSWORD;
+}
+
 // Read on every request so the credentials come from the current env.
 function credentialsMatch({
   username,
   password,
 }: z.infer<typeof Credentials>): boolean {
-  const expectedPassword = process.env.ADMIN_PASSWORD ?? "";
-  if (!expectedPassword) return false;
   const userOk = same(username, process.env.ADMIN_USERNAME || "admin");
-  const passwordOk = same(password, expectedPassword);
+  const passwordOk = same(password, process.env.ADMIN_PASSWORD ?? "");
   return userOk && passwordOk;
 }
 
@@ -40,6 +43,10 @@ export const login: RequestHandler = (req, res) => {
   const credentials = Credentials.safeParse(req.body);
   if (!credentials.success) {
     res.status(400).json({ error: "username and password are required" });
+    return;
+  }
+  if (adminPasswordMissing()) {
+    res.status(503).json({ error: "ADMIN_PASSWORD is not set" });
     return;
   }
   if (!credentialsMatch(credentials.data)) {
