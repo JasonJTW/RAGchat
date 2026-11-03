@@ -58,7 +58,7 @@ paths:
                   $ref: "#/components/schemas/DocumentSummary"
     post:
       operationId: uploadDocuments
-      summary: Upload one or more documents
+      summary: Upload one or more documents (at most 10 files, 5 MiB each)
       requestBody:
         required: true
         content:
@@ -80,8 +80,26 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/DocumentSummary"
+        "400":
+          description: More than 10 files in one request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: A file is larger than 5 MiB
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 components:
   schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
     DocumentSummary:
       type: object
       required: [id, filename, chunkCount, uploadedAt]
