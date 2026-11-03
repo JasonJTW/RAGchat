@@ -29,7 +29,7 @@
 
 ## Stubs
 
-- 管理員帳號：只有一組帳密，從 `server/.env` 的 `ADMIN_USERNAME`（預設 `admin`）、`ADMIN_PASSWORD` 讀取；登入後發 httpOnly session cookie，存在記憶體，伺服器重啟就要重新登入
+- 管理員帳號：只有一組帳密，從根目錄 `.env` 的 `ADMIN_USERNAME`（預設 `admin`）、`ADMIN_PASSWORD` 讀取；登入後發 httpOnly session cookie，存在記憶體，伺服器重啟就要重新登入
 - 客服聯絡方式：固定假信箱 `support@megaweaving.example`，寫在設定檔，不是真的信箱
 - 文件與向量儲存：存在 `server/data/` 的 JSON 檔（原始檔＋chunks＋embeddings），不用資料庫；server 啟動時整份載入記憶體，檢索直接逐一算 cosine。儲存與檢索藏在同一個介面後面，之後換成 pgvector 等向量資料庫只動這個模組
 - 聊天紀錄：只存在瀏覽器分頁的 state，重新整理就消失
