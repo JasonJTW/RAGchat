@@ -72,6 +72,60 @@ describe("POST /api/chat", () => {
     expect(res.status).toBe(400);
   });
 
+  it("accepts an earlier answer over 2,000 characters in the history", async () => {
+    installStubModels();
+    vi.stubEnv("DATA_DIR", mkdtempSync(path.join(tmpdir(), "kb-chat-test-")));
+    vi.resetModules();
+    const { app } = await import("./app.js");
+    const res = await request(app)
+      .post("/api/chat")
+      .send({
+        messages: [
+          { id: "u1", role: "user", parts: [{ type: "text", text: "hi" }] },
+          {
+            id: "a1",
+            role: "assistant",
+            parts: [{ type: "text", text: "答".repeat(3000) }],
+          },
+          { id: "u2", role: "user", parts: [{ type: "text", text: "再說" }] },
+        ],
+      });
+    expect(res.status).toBe(200);
+  });
+
+  it.each([
+    ["a null message", [null]],
+    ["a null part", [{ id: "u1", role: "user", parts: [null] }]],
+    [
+      "a non-string text",
+      [{ id: "u1", role: "user", parts: [{ type: "text", text: 42 }] }],
+    ],
+    [
+      "a text over 2,000 characters",
+      [
+        {
+          id: "u1",
+          role: "user",
+          parts: [{ type: "text", text: "問".repeat(2001) }],
+        },
+      ],
+    ],
+    [
+      "more than 50 messages",
+      Array.from({ length: 51 }, (_, i) => ({
+        id: `u${i}`,
+        role: "user",
+        parts: [{ type: "text", text: "hi" }],
+      })),
+    ],
+  ])("rejects %s with 400 and no stack trace", async (_, messages) => {
+    vi.resetModules();
+    const { app } = await import("./app.js");
+    const res = await request(app).post("/api/chat").send({ messages });
+    expect(res.status).toBe(400);
+    expect(res.text).not.toMatch(/TypeError|\n\s+at /);
+  });
+
   it("streams the model's answer", async () => {
     const { chat } = installStubModels();
     chat.reply = "旅梯計畫巡迴了 5 站。[1]";

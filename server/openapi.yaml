@@ -45,8 +45,27 @@ paths:
                 messages:
                   type: array
                   description: AI SDK UIMessage objects, oldest first
+                  maxItems: 50
                   items:
                     type: object
+                    required: [role, parts]
+                    properties:
+                      role:
+                        type: string
+                        enum: [user, assistant, system]
+                      parts:
+                        type: array
+                        items:
+                          type: object
+                          required: [type]
+                          properties:
+                            type:
+                              type: string
+                            text:
+                              type: string
+                              description: >
+                                At most 2000 characters in a user message,
+                                20000 in other messages
       responses:
         "200":
           description: UI message stream
@@ -55,7 +74,9 @@ paths:
               schema:
                 type: string
         "400":
-          description: "`messages` is not an array"
+          description: >
+            `messages` is missing or malformed, has more than 50 messages, or
+            has a text over its length limit
           content:
             application/json:
               schema:

@@ -3,7 +3,6 @@ import {
   createUIMessageStream,
   pipeUIMessageStreamToResponse,
   streamText,
-  type UIMessage,
 } from "ai";
 import { retrieve, type Passage } from "./documents.js";
 import { CHAT_MODEL, CHAT_PROVIDER_OPTIONS } from "./models.js";
@@ -37,8 +36,14 @@ const SYSTEM_PROMPT = `你是「大量交織 megaweaving」的客服助理。
 - 例外：段落完全沒有提到問題要問的事時，不要作答，整個回覆只寫這一句（不加段落編號）：${REFUSAL}
   段落有答案時，照上面的規則完整回答，不要寫這一句。`;
 
+/** The parts of an AI SDK UIMessage the chat reads. */
+export interface ChatMessage {
+  role: string;
+  parts: { type: string; text?: string }[];
+}
+
 /** Answers the latest user message from the stored documents, streamed. */
-export function streamAnswer(res: Response, messages: UIMessage[]) {
+export function streamAnswer(res: Response, messages: ChatMessage[]) {
   const question = latestUserText(messages);
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
@@ -92,12 +97,12 @@ export function streamAnswer(res: Response, messages: UIMessage[]) {
   });
 }
 
-function latestUserText(messages: UIMessage[]): string {
+function latestUserText(messages: ChatMessage[]): string {
   const latest = [...messages]
     .reverse()
     .find((message) => message.role === "user");
   return (latest?.parts ?? [])
-    .map((part) => (part.type === "text" ? part.text : ""))
+    .map((part) => (part.type === "text" ? (part.text ?? "") : ""))
     .join("");
 }
 
