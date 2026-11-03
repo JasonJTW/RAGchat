@@ -8,6 +8,7 @@ paths:
   /health:
     get:
       operationId: getHealth
+      security: []
       summary: Liveness check
       responses:
         "200":
@@ -19,6 +20,7 @@ paths:
   /api/chat:
     post:
       operationId: postChat
+      security: []
       summary: Answer a question from the uploaded documents
       description: >
         Streams the answer as an AI SDK UI message stream (Server-Sent Events).
@@ -43,10 +45,49 @@ paths:
             text/event-stream:
               schema:
                 type: string
+  /api/login:
+    post:
+      operationId: login
+      security: []
+      summary: Log in to the admin
+      description: >
+        Checks the credentials against `ADMIN_USERNAME` (default `admin`) and
+        `ADMIN_PASSWORD`. While `ADMIN_PASSWORD` is unset nobody can log in.
+        Sessions live in memory, so restarting the server logs the admin out.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+      responses:
+        "204":
+          description: Logged in
+          headers:
+            Set-Cookie:
+              description: "`admin_session` cookie (HttpOnly, SameSite=Lax)"
+              schema:
+                type: string
+        "400":
+          description: The body is missing a username or password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /api/documents:
     get:
       operationId: listDocuments
       summary: List uploaded documents
+      security:
+        - adminSession: []
       responses:
         "200":
           description: Documents, oldest first
@@ -56,9 +97,13 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/DocumentSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
     post:
       operationId: uploadDocuments
       summary: Upload one or more documents (at most 10 files, 5 MiB each)
+      security:
+        - adminSession: []
       requestBody:
         required: true
         content:
@@ -92,7 +137,21 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 components:
+  securitySchemes:
+    adminSession:
+      type: apiKey
+      in: cookie
+      name: admin_session
+  responses:
+    Unauthorized:
+      description: Not logged in, or wrong credentials
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
   schemas:
     Error:
       type: object

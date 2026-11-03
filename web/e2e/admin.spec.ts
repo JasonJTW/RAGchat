@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
+import { logIn } from "./admin-login";
 
 const UPLOADS = path.join(
   __dirname,
@@ -12,6 +13,10 @@ async function chooseFiles(page: Page, ...names: string[]) {
   await page.getByRole("button", { name: "選擇檔案" }).click();
   await (await chooser).setFiles(names.map((name) => path.join(UPLOADS, name)));
 }
+
+test.beforeEach(async ({ page }) => {
+  await logIn(page);
+});
 
 test("the upload button appears only after choosing a file", async ({
   page,

@@ -1,6 +1,7 @@
 import express, { type ErrorRequestHandler } from "express";
 import cors from "cors";
 import multer from "multer";
+import { login, requireAdmin } from "./auth.js";
 import { streamAnswer } from "./chat.js";
 import { addDocument, listDocuments } from "./documents.js";
 
@@ -23,6 +24,10 @@ app.get("/health", (_req, res) => {
 app.post("/api/chat", async (_req, res) => {
   await streamAnswer(res);
 });
+
+app.post("/api/login", login);
+
+app.use("/api/documents", requireAdmin);
 
 app.get("/api/documents", (_req, res) => {
   res.json(listDocuments());
