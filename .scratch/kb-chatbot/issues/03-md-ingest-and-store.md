@@ -1,6 +1,6 @@
 # 03: Markdown 切段、embedding、存檔
 
-**What to build:** 後台上傳 `.md` 後，server 依 02 定案的切法切段，用 AI SDK 的 `embedMany` 算向量。模型從 provider registry 以 `EMBEDDING_MODEL`（預設 `openai:text-embedding-3-small`）選，程式其他地方不直接 import 廠商 SDK。結果存進 `server/data/` 的 JSON 檔，存取都藏在單一儲存模組後面。上傳要等切段與 embedding 都完成才回應，期間按鈕顯示「處理中…」。列表顯示真實段落數。每筆文件可展開「查看段落」，列出每個 chunk 的標題路徑與前 80 字。server 重啟時把 JSON 整份載入記憶體；每個 chunk 記下產生它的 embedding 模型 id，啟動時發現 `EMBEDDING_MODEL` 換了，就自動全部重算。聊天仍是 01 的假回答。
+**What to build:** 後台上傳 `.md` 後，server 依 02 定案的切法切段，用 AI SDK 的 `embedMany` 算向量。模型透過 AI Gateway，以 `EMBEDDING_MODEL` 字串（預設 `openai/text-embedding-3-small`）指定，程式裡不 import 廠商套件。結果存進 `server/data/` 的 JSON 檔，存取都藏在單一儲存模組後面。上傳要等切段與 embedding 都完成才回應，期間按鈕顯示「處理中…」。列表顯示真實段落數。每筆文件可展開「查看段落」，列出每個 chunk 的標題路徑與前 80 字。server 重啟時把 JSON 整份載入記憶體；每個 chunk 記下產生它的 embedding 模型 id，啟動時發現 `EMBEDDING_MODEL` 換了，就自動全部重算。聊天仍是 01 的假回答。
 
 **Blocked by:** 01, 02
 

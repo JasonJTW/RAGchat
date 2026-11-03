@@ -43,10 +43,11 @@
 - 只有後台要登入；前台聊天頁不用登入，任何人打開就能問
 - 登入只做一組帳密（環境變數），沒有註冊、忘記密碼、多管理員
 - 回答一律用繁體中文；使用者用英文問也回繁中
-- LLM 呼叫一律走 Vercel AI SDK（`ai` 套件的 `streamText`、`generateText`、`embedMany`、`embed`），程式其他地方不直接 import 任何廠商的 SDK；用 `createProviderRegistry` 以 `provider:model` 字串選模型，這次只註冊 `@ai-sdk/openai`（影響 Demo Script 5–8）
-  - 聊天模型：`CHAT_MODEL`，預設 `openai:gpt-5-mini`；追問改寫也用同一個
-  - Embedding 模型：`EMBEDDING_MODEL`，預設 `openai:text-embedding-3-small`
-  - 金鑰：`OPENAI_API_KEY`；之後換 Anthropic、Google 等廠商時，只要多裝一個 `@ai-sdk/<provider>` 套件、在 registry 加一行，再改環境變數
+- LLM 呼叫一律走 Vercel AI SDK（`ai` 套件的 `streamText`、`generateText`、`embedMany`、`embed`），透過 Vercel AI Gateway 連模型：Gateway 是 AI SDK 預設的全域 provider，模型直接寫成 `<廠商>/<模型>` 字串，程式裡不 import 任何廠商套件（不用 `@ai-sdk/openai`）（影響 Demo Script 5–8）
+  - 聊天模型：`CHAT_MODEL`，預設 `openai/gpt-5-mini`；追問改寫也用同一個
+  - Embedding 模型：`EMBEDDING_MODEL`，預設 `openai/text-embedding-3-small`
+  - 金鑰：只要根目錄 `.env` 的 `AI_GATEWAY_API_KEY`；換成 `anthropic/…`、`google/…` 等模型只改環境變數字串，不用裝套件、不用各家金鑰
+  - 模型字串只在 server 啟動時從環境變數讀一次，集中在一個模組；聊天、改寫、embedding 都從那裡拿
   - 每個 chunk 記下產生它的 embedding 模型 id；server 啟動時如果發現 `EMBEDDING_MODEL` 換了，就自動把所有文件重新 embedding（不同模型的向量維度不同，不能混著比）
 - 切段策略（影響 Demo Script 3、5、6）：
   - markdown 依標題階層（`#`/`##`/`###`）切，每段前面加上「檔名 › H1 › H2 › H3」的標題路徑一起 embedding，讓「A1. 一百元的大直社區改造計畫」這種小節即使內文沒寫計畫名也找得到
@@ -65,7 +66,7 @@
 - 前後台連線（影響 Demo Script 1–2）：瀏覽器只連 :3000，Next.js 用 rewrites 把 `/api/*` 轉給 Express :4000，所以登入 cookie 是同源的，不用處理跨域 cookie
 - 聊天串流（影響 Demo Script 5–7）：前台用 `@ai-sdk/react` 的 `useChat`，後端回 AI SDK 的 UI message stream；出處以 data part 跟著同一個串流送到前台，不另開請求
 - 上傳是同步處理（影響 Demo Script 3）：上傳請求等切段與 embedding 都完成才回應，回應後那筆才出現在列表；13 份檔案預估幾十秒內完成，上傳期間按鈕顯示「處理中…」
-- 測試分兩層（影響全部 Acceptance criteria）：單元與 server 測試用 AI SDK 的 mock 模型，不打 OpenAI，CI 照常跑；answer key 的 Playwright E2E 會打真的 OpenAI，沒有 `OPENAI_API_KEY` 時自動略過，在本機手動跑
+- 測試分兩層（影響全部 Acceptance criteria）：單元與 server 測試用 AI SDK 的 mock 模型，不打 AI Gateway，CI 照常跑；answer key 的 Playwright E2E 會透過 AI Gateway 打真的模型，標成 `@live`、用 `npm run test:live` 跑，沒有 `AI_GATEWAY_API_KEY` 時自動略過，在本機手動跑
 - 後台段落檢視（影響 Demo Script 3）：列表每筆文件可以展開「查看段落」，列出每個 chunk 的標題路徑（PDF 為頁碼）與前 80 字，用來檢查切法；唯讀，不能編輯
 - 單檔上限 10 MB
 - answer-key 的期望答案是我直接讀 wiki 原文寫的，客戶確認前都算假設

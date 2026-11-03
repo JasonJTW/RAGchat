@@ -8,4 +8,4 @@
 
 - [ ] `npm run dev` 後打開 `http://localhost:3000/`，輸入任一問題送出，畫面逐字出現固定假回答，回答下方有 1 個出處
 - [ ] 打開 `http://localhost:3000/admin`，上傳 `fixtures/upload/01-overview.md`，列表出現一筆「01-overview.md」，段落數 0
-- [ ] 一支 Playwright E2E 跑過上面兩步，不需要 `OPENAI_API_KEY`
+- [ ] 一支 Playwright E2E 跑過上面兩步，不需要 `AI_GATEWAY_API_KEY`
