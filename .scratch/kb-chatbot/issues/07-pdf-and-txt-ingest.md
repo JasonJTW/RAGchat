@@ -4,9 +4,9 @@
 
 **Blocked by:** 04
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] 上傳 `04-founder-hsiao-yu-chih.pdf` 後問 Q7、Q8，回答符合 answer key，出處分別是「04-founder-hsiao-yu-chih.pdf › 第 2 頁」「… › 第 4 頁」
-- [ ] 上傳 `faq.txt`，「查看段落」剛好 6 段，每段一組 Q/A（含 Q4/Q5 沒空行和「Q：」那兩組）
-- [ ] 上傳 `faq.txt`、`pickup-notice.txt` 後問 Q1、Q6、Q10，回答與出處符合 answer key
-- [ ] 上傳一份只有圖片的 PDF，列表段落數 0，並顯示「無法抽出文字」
+- [x] 上傳 `04-founder-hsiao-yu-chih.pdf` 後問 Q7、Q8，回答符合 answer key，出處分別是「04-founder-hsiao-yu-chih.pdf › 第 2 頁」「… › 第 4 頁」
+- [x] 上傳 `faq.txt`，「查看段落」剛好 6 段，每段一組 Q/A（含 Q4/Q5 沒空行和「Q：」那兩組）
+- [x] 上傳 `faq.txt`、`pickup-notice.txt` 後問 Q1、Q6、Q10，回答與出處符合 answer key
+- [x] 上傳一份只有圖片的 PDF，列表段落數 0，並顯示「無法抽出文字」

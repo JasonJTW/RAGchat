@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import { embed as embedOne, embedMany } from "ai";
 import { getEncoding } from "js-tiktoken";
 import { hybridSearch } from "./hybrid-search.js";
-import { chunkMarkdown, type MarkdownChunk } from "./markdown-chunks.js";
+import { chunkDocument } from "./document-chunks.js";
+import type { Chunk } from "./markdown-chunks.js";
 import { EMBEDDING_MODEL } from "./models.js";
 
 // The document store: uploaded files, their chunks and embeddings, kept in
@@ -22,7 +23,7 @@ export interface DocumentSummary {
 
 /** A chunk as shown under 查看段落 in the admin. */
 export interface ChunkSummary {
-  /** [filename, H1, H2, H3] */
+  /** [filename, H1, H2, H3]; a PDF's is [filename, "第 N 頁"], a txt's [filename, its opening] */
   path: string[];
   /** The first 80 characters of the chunk's content. */
   preview: string;
@@ -39,7 +40,7 @@ export interface Passage {
   text: string;
 }
 
-interface StoredChunk extends MarkdownChunk {
+interface StoredChunk extends Chunk {
   embedding: number[];
   embeddingModel: string;
 }
@@ -127,9 +128,7 @@ export async function addDocuments(
 ): Promise<DocumentSummary[]> {
   const added: StoredDocument[] = [];
   for (const { filename, bytes } of files) {
-    const chunks = filename.toLowerCase().endsWith(".md")
-      ? chunkMarkdown(filename, bytes.toString("utf8"), countTokens)
-      : [];
+    const chunks = await chunkDocument(filename, bytes, countTokens);
     added.push({
       id: randomUUID(),
       filename,
@@ -149,7 +148,24 @@ export async function addDocuments(
   return listDocuments().filter((summary) => ids.has(summary.id));
 }
 
-async function embed(chunks: MarkdownChunk[]): Promise<StoredChunk[]> {
+/**
+ * Removes the document with its chunks and embeddings, saved before it
+ * resolves. False when no document has that id.
+ */
+export function removeDocument(id: string): boolean {
+  const index = documents.findIndex((doc) => doc.id === id);
+  if (index < 0) return false;
+  const [removed] = documents.splice(index, 1);
+  try {
+    save();
+  } catch (error) {
+    documents.splice(index, 0, removed); // still stored on disk, so keep it
+    throw error;
+  }
+  return true;
+}
+
+async function embed(chunks: Chunk[]): Promise<StoredChunk[]> {
   if (chunks.length === 0) return [];
   const { embeddings } = await embedMany({
     model: EMBEDDING_MODEL,

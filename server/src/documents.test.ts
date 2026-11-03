@@ -96,6 +96,31 @@ describe("/api/documents", () => {
     expect(chunks.body).toHaveLength(13);
   });
 
+  it("keeps a deleted document deleted across a restart", async () => {
+    let admin = await startServerAsAdmin();
+    const upload = await admin
+      .post("/api/documents")
+      .attach("files", ...fixture("05-projects-and-practice.md"));
+    const [doc] = upload.body as { id: string }[];
+
+    const res = await admin.delete(`/api/documents/${doc.id}`);
+    expect(res.status).toBe(204);
+    admin = await startServerAsAdmin();
+
+    const list = await admin.get("/api/documents");
+    expect(list.body).not.toContainEqual(
+      expect.objectContaining({ id: doc.id }),
+    );
+    const chunks = await admin.get(`/api/documents/${doc.id}/chunks`);
+    expect(chunks.status).toBe(404);
+  });
+
+  it("returns 404 when deleting an unknown document", async () => {
+    const admin = await startServerAsAdmin();
+    const res = await admin.delete("/api/documents/nope");
+    expect(res.status).toBe(404);
+  });
+
   it("re-embeds every chunk when EMBEDDING_MODEL changes", async () => {
     let admin = await startServerAsAdmin({ EMBEDDING_MODEL: "test/model-a" });
     const upload = await admin

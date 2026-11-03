@@ -31,3 +31,40 @@ test("an answer streams in and cites the passage it marks", async ({
   await expect(passage).toBeVisible();
   await expect(passage).not.toBeEmpty();
 });
+
+test("a deleted document leaves the list and is no longer cited", async ({
+  page,
+}) => {
+  const Q4 = "旅梯計畫總共巡迴了幾站？是哪幾年？";
+  const citesQ4Source = async () =>
+    (
+      await (
+        await ask(page, Q4)
+      ).answer
+        .getByRole("list", { name: "出處" })
+        .locator("summary")
+        .allTextContents()
+    ).some((label) => /^\[\d+\] 05-projects-and-practice\.md › /.test(label));
+  // Start from a known store: earlier tests share this server.
+  await logIn(page);
+  await expect(page.getByRole("table")).toHaveAttribute("aria-busy", "false");
+  const rows = page.getByRole("table").getByRole("row");
+  while ((await rows.count()) > 1) {
+    const n = await rows.count();
+    await rows.nth(1).getByRole("button", { name: "刪除" }).click();
+    await expect(rows).toHaveCount(n - 1);
+  }
+  await upload(page, "01-overview.md", "05-projects-and-practice.md");
+  expect(await citesQ4Source()).toBe(true);
+
+  await page.goto("/admin");
+  await page
+    .getByRole("row", { name: /05-projects-and-practice\.md/ })
+    .getByRole("button", { name: "刪除" })
+    .click();
+
+  // The header row and 01-overview.md remain.
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(1)).toContainText("01-overview.md");
+  expect(await citesQ4Source()).toBe(false);
+});

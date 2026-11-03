@@ -24,13 +24,15 @@ const REFUSAL = `${REFUSAL_PHRASE}，請來信客服 ${SUPPORT_EMAIL}。`;
 // Below this cosine similarity between the question and its best-matching
 // chunk, no document covers the question: refuse without calling the model.
 // Calibrated on the answer key with openai/text-embedding-3-small: answerable
-// questions score 0.38–0.73, Q12 0.22 (see the spec's 拒答規則).
+// questions score 0.38–0.85, Q12 0.22 (0.27 with the PDF and txt uploaded;
+// see the spec's 拒答規則).
 const MIN_SIMILARITY = 0.3;
 
 const SYSTEM_PROMPT = `你是「大量交織 megaweaving」的客服助理。
 - 一律用繁體中文回答，即使使用者用其他語言提問。
 - 只根據使用者訊息裡提供的段落作答，不要用段落以外的知識。
 - 先直接回答問題，再用一兩句補上段落裡跟答案同一處的關鍵細節：條件、材料、人數、年份、原因或出處（例如「不是原創」就說出它源自哪裡）。
+- 問題問要做哪些事、確認什麼、有哪幾類時，段落裡相關的每一項都要列出，不要只挑其中幾項。
 - 每個事實後面用段落編號標出處，例如 [1]、[2]；只標你實際用到的段落，不要另寫「出處：」。
 - 只有當段落對同一件事給出不同說法時（例如人數不同）：先給最新且有日期的說法，再列出其他說法與各自的年份、來源，並說明這些說法未經確認。說法一致時不要提矛盾。
 - 例外：段落完全沒有提到問題要問的事時，不要作答，整個回覆只寫這一句（不加段落編號）：${REFUSAL}

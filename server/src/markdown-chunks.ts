@@ -4,8 +4,8 @@
 const MAX_TOKENS = 800; // per chunk, heading prefix included
 const DROP_UNDER_TOKENS = 30; // e.g. a lone "_最後更新：…_" line
 
-export interface MarkdownChunk {
-  /** [filename, H1, H2, H3] */
+export interface Chunk {
+  /** [filename, H1, H2, H3]; a PDF's is [filename, "第 N 頁"], a txt's [filename, its opening] */
   path: string[];
   /** Shown when a citation expands. */
   content: string;
@@ -22,9 +22,9 @@ export function chunkMarkdown(
   filename: string,
   markdown: string,
   countTokens: (text: string) => number,
-): MarkdownChunk[] {
+): Chunk[] {
   const abbreviations = parseAbbreviations(markdown); // only 03-timeline has 來源縮寫
-  const chunks: MarkdownChunk[] = [];
+  const chunks: Chunk[] = [];
   for (const section of parseSections(filename, markdown)) {
     const prefix = `${section.path.join(" › ")}\n\n`;
     const budget = MAX_TOKENS - countTokens(prefix);
