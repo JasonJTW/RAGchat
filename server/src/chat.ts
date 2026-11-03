@@ -28,5 +28,11 @@ export function streamAnswer(res: Response): Promise<void> {
       writer.write({ type: "finish" });
     },
   });
-  return pipeUIMessageStreamToResponse({ response: res, stream });
+  return pipeUIMessageStreamToResponse({
+    response: res,
+    stream,
+    // Stops the Next.js rewrite proxy from gzipping the stream, which buffers
+    // it until the answer is complete.
+    headers: { "Cache-Control": "no-cache, no-transform" },
+  });
 }

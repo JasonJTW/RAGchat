@@ -7,7 +7,8 @@ export default defineConfig({
   testDir: "./e2e",
   // Live tests (tagged @live) call the real LLM; run them with `npm run test:live`.
   grepInvert: process.env.LIVE ? undefined : /@live/,
-  fullyParallel: true,
+  // Tests share one stateful server (the document list), so run them one at a time.
+  workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   reporter: "html",
@@ -22,7 +23,12 @@ export default defineConfig({
     {
       command: "npm run dev -w server",
       cwd: "..",
-      env: { PORT: String(SERVER_PORT) },
+      env: {
+        PORT: String(SERVER_PORT),
+        // The full suite must not reach a real model: blank the key unless
+        // running live tests. (Shell env wins over the root .env file.)
+        ...(process.env.LIVE ? {} : { AI_GATEWAY_API_KEY: "" }),
+      },
       url: `http://localhost:${SERVER_PORT}/health`,
       reuseExistingServer: false,
     },

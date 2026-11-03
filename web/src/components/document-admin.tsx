@@ -25,10 +25,11 @@ function useHydrated() {
 }
 
 export function DocumentAdmin() {
-  const { data: documents = [], mutate } = useSWR<DocumentSummary[]>(
-    "/api/documents",
-    fetchJson,
-  );
+  const {
+    data: documents = [],
+    isLoading,
+    mutate,
+  } = useSWR<DocumentSummary[]>("/api/documents", fetchJson);
   const input = useRef<HTMLInputElement>(null);
   const hydrated = useHydrated();
   const [selected, setSelected] = useState<File[]>([]);
@@ -103,7 +104,7 @@ export function DocumentAdmin() {
           {error}
         </p>
       )}
-      <table className="w-full text-left text-sm">
+      <table aria-busy={isLoading} className="w-full text-left text-sm">
         <thead>
           <tr>
             <th>檔名</th>
