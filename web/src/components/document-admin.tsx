@@ -1,8 +1,10 @@
 "use client";
 
-import { useRef, useState, useSyncExternalStore } from "react";
+import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { Button } from "@/components/ui/button";
+import { useHydrated } from "@/lib/use-hydrated";
 
 interface DocumentSummary {
   id: string;
@@ -11,25 +13,32 @@ interface DocumentSummary {
   uploadedAt: string;
 }
 
-const fetchJson = (url: string) => fetch(url).then((res) => res.json());
+/** The admin session is missing or expired (the server restarted). */
+class Unauthorized extends Error {}
 
-// False in the server-rendered HTML, true once React has hydrated. Until then
-// the button has no click handler, so it stays disabled instead of ignoring clicks.
-const noopSubscribe = () => () => {};
-function useHydrated() {
-  return useSyncExternalStore(
-    noopSubscribe,
-    () => true,
-    () => false,
-  );
+async function adminFetch(url: string, init?: RequestInit) {
+  const res = await fetch(url, init);
+  if (res.status === 401) throw new Unauthorized();
+  if (!res.ok)
+    throw new Error(`${init?.method ?? "GET"} ${url}: ${res.status}`);
+  return res;
 }
 
+const fetchJson = (url: string) => adminFetch(url).then((res) => res.json());
+
 export function DocumentAdmin() {
+  const router = useRouter();
   const {
     data: documents = [],
     isLoading,
     mutate,
-  } = useSWR<DocumentSummary[]>("/api/documents", fetchJson);
+  } = useSWR<DocumentSummary[]>("/api/documents", fetchJson, {
+    // Only fires for a failed request, never for the 401 SWR keeps cached
+    // from before logging in.
+    onError: (e) => {
+      if (e instanceof Unauthorized) router.replace("/admin/login");
+    },
+  });
   const input = useRef<HTMLInputElement>(null);
   const hydrated = useHydrated();
   const [selected, setSelected] = useState<File[]>([]);
@@ -47,12 +56,12 @@ export function DocumentAdmin() {
     setError(null);
     setUploading(true);
     try {
-      const res = await fetch("/api/documents", { method: "POST", body });
-      if (!res.ok) throw new Error(`upload failed: ${res.status}`);
+      await adminFetch("/api/documents", { method: "POST", body });
       clearSelection();
       await mutate();
-    } catch {
-      setError("上傳失敗，請再試一次");
+    } catch (e) {
+      if (e instanceof Unauthorized) router.replace("/admin/login");
+      else setError("上傳失敗，請再試一次");
     } finally {
       setUploading(false);
     }

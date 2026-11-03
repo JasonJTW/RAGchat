@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { ADMIN_PASSWORD, ADMIN_USERNAME } from "./e2e/admin-login";
 
 const WEB_PORT = 3100;
 const SERVER_PORT = 4100;
@@ -25,6 +26,8 @@ export default defineConfig({
       cwd: "..",
       env: {
         PORT: String(SERVER_PORT),
+        ADMIN_USERNAME,
+        ADMIN_PASSWORD,
         // The full suite must not reach a real model: blank the key unless
         // running live tests. (Shell env wins over the root .env file.)
         ...(process.env.LIVE ? {} : { AI_GATEWAY_API_KEY: "" }),
