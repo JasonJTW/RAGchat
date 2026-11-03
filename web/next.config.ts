@@ -2,7 +2,12 @@ import path from "node:path";
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // The browser only talks to :3000; /api/* goes to the Express server, so
+  // its cookies are same-origin.
+  async rewrites() {
+    const server = process.env.SERVER_URL ?? "http://localhost:4000";
+    return [{ source: "/api/:path*", destination: `${server}/api/:path*` }];
+  },
   cacheComponents: true,
   partialPrefetching: true,
   turbopack: {
