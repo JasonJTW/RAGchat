@@ -1,6 +1,6 @@
 name: Claude Code Review
 
-# Required status check (see the main ruleset). No workflow-level `paths` filter:
+# Required status check (scripts/main-ruleset.json; apply with `npm run setup:repo`). No workflow-level `paths` filter:
 # a required check that never reports blocks the PR, so irrelevant PRs pass in-job.
 on:
   pull_request:
