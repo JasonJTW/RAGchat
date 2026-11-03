@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: ai-starter server
+  title: kb-chatbot server
   version: 0.1.0
 servers:
   - url: http://localhost:4000
@@ -16,8 +16,86 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Health"
+  /api/chat:
+    post:
+      operationId: postChat
+      summary: Answer a question from the uploaded documents
+      description: >
+        Streams the answer as an AI SDK UI message stream (Server-Sent Events).
+        Citations arrive as `data-citation` parts in the same stream.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [messages]
+              properties:
+                messages:
+                  type: array
+                  description: AI SDK UIMessage objects, oldest first
+                  items:
+                    type: object
+      responses:
+        "200":
+          description: UI message stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /api/documents:
+    get:
+      operationId: listDocuments
+      summary: List uploaded documents
+      responses:
+        "200":
+          description: Documents, oldest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DocumentSummary"
+    post:
+      operationId: uploadDocuments
+      summary: Upload one or more documents
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+      responses:
+        "201":
+          description: The documents that were added
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DocumentSummary"
 components:
   schemas:
+    DocumentSummary:
+      type: object
+      required: [id, filename, chunkCount, uploadedAt]
+      properties:
+        id:
+          type: string
+        filename:
+          type: string
+        chunkCount:
+          type: integer
+          minimum: 0
+        uploadedAt:
+          type: string
+          format: date-time
     Health:
       type: object
       required: [ok]
