@@ -5,14 +5,14 @@
 - `npm run test:e2e`: Playwright against `web` (starts `next dev` itself)
 - `npm run lint`, `npm run typecheck`: every workspace (ESLint + `tsc`)
 - `npm run format`: Prettier
-- `npm run setup:repo`: apply `scripts/main-ruleset.json` to the GitHub repo (needs admin `gh`). **Run once after creating a repo from this starter.**
+- `npm run setup:repo`: apply the GitHub repo settings (auto-merge on, delete branch on merge) and the `scripts/main-ruleset.json` ruleset (needs admin `gh`). **Run once after creating a repo from this starter.**
 - CI (`.github/workflows/ci.yml`) runs a production dependency audit, lint, typecheck, test, build, and E2E on every PR and push to `main`.
 
 ## Conventions
 
 - Tests sit next to the code as `*.test.ts(x)`. Server tests import `app` from `server/src/app.ts` and hit it with supertest; `server/src/index.ts` only calls `listen`.
 - E2E specs live in `web/e2e/*.spec.ts`; Vitest ignores that folder.
-- The pre-commit hook (`lefthook.yml`) formats and lints staged files, then runs `npm run typecheck` and `npm test`. The pre-push hook refuses pushes to `main`, then runs `npm run test:e2e`. Changes reach `main` through a PR: CI and the Claude reviews are required checks, enforced by the `main` ruleset. The ruleset is a GitHub setting, not git content, so it is absent in every new clone or template copy until `npm run setup:repo` runs. Without it nothing blocks a merge. If you add or rename a required job, update `scripts/main-ruleset.json` and re-run it. Fix failures; never bypass either hook with `--no-verify`.
+- The pre-commit hook (`lefthook.yml`) formats and lints staged files, then runs `npm run typecheck` and `npm test`. The pre-push hook refuses pushes to `main`, then runs `npm run test:e2e`. Changes reach `main` through a PR: CI and the Claude reviews are required checks, enforced by the `main` ruleset. The ruleset and merge settings are GitHub settings, not git content, so they are absent in every new clone or template copy until `npm run setup:repo` runs. Without it nothing blocks a merge. If you add or rename a required job, update `scripts/main-ruleset.json` and re-run it. Fix failures; never bypass either hook with `--no-verify`.
 - After opening a PR, enable auto-merge: `gh pr merge --auto --squash <PR>`. GitHub then merges it once the required checks pass. Skip this for draft PRs, or when the user says to hold the merge.
 - If auto-merge stalls on a failing check, fix the failure and push. Never merge manually past a red check.
 - A behaviour change ships with a test.
