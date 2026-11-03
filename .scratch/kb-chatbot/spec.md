@@ -6,7 +6,7 @@
 **Acceptance criteria**:
 
 - [ ] 未登入進 `/admin` 會被導到登入畫面；帳密錯誤顯示「帳號或密碼錯誤」，正確後看到文件列表
-- [ ] 後台可上傳 `.pdf`、`.md`、`.txt`，一次可選多檔；上傳 `fixtures/upload/` 的 13 份支援檔後，列表顯示 13 筆，每筆有檔名、類型、段落（chunk）數、上傳時間
+- [ ] 後台可上傳 `.pdf`、`.md`、`.txt`，一次可選多檔（每次最多 10 份）；分兩批上傳 `fixtures/upload/` 的 13 份支援檔後，列表顯示 13 筆，每筆有檔名、類型、段落（chunk）數、上傳時間
 - [ ] 上傳 `.docx` 等不支援格式時，畫面顯示「不支援的檔案格式」，列表筆數不變
 - [ ] 後台可刪除文件；刪除後該文件立即從列表消失，chatbot 也不再引用它
 - [ ] 前台聊天回答以串流逐字顯示，第一個字在送出後 5 秒內出現
@@ -20,7 +20,7 @@
 
 1. 未登入開 `/admin` → 被導到登入畫面
 2. 登入畫面輸入 `admin` / 錯誤密碼 → 顯示「帳號或密碼錯誤」；改輸入正確密碼（`.env` 的 `ADMIN_PASSWORD`）→ 進入後台，文件列表為空
-3. 後台一次選取 `fixtures/upload/` 下 13 份 `.md`、`.pdf`、`.txt` 上傳 → 列表出現 13 筆，各自顯示段落數（0 以上的整數）
+3. 後台分兩批上傳 `fixtures/upload/` 下 13 份 `.md`、`.pdf`、`.txt`：先選 10 份 `.md` 上傳，再選其餘 3 份（`04-founder-hsiao-yu-chih.pdf`、`faq.txt`、`pickup-notice.txt`）上傳 → 列表出現 13 筆，各自顯示段落數（0 以上的整數）
 4. 後台上傳 `fixtures/upload/not-supported.docx` → 顯示「不支援的檔案格式」，列表仍為 13 筆
 5. 前台問 answer-key 的 Q1–Q11（Q2→Q3 為同一對話的追問）→ 每題回答符合 answer key 的 match rule，出處列在回答下方
 6. 點 Q4 回答下方的出處 → 展開 `05-projects-and-practice.md` 「C. 移動微型空間計畫」那張表的原文
@@ -67,10 +67,10 @@
 - 資料量規模：demo 文件約 4.3 萬字、預估 150–250 個 chunk，暴力 cosine 每次查詢不到 1 ms，JSON 檔約 5 MB。先卡住的是 JSON 檔大小（每個 1536 維向量存成文字約 30 KB），不是計算：約 2,000 個 chunk（約 60 萬字、60 MB）以內都沒問題；超過這個量、或需要多台 server 同時讀寫時，再換向量資料庫
 - 前後台連線（影響 Demo Script 1–2）：瀏覽器只連 :3000，Next.js 用 rewrites 把 `/api/*` 轉給 Express :4000，所以登入 cookie 是同源的，不用處理跨域 cookie
 - 聊天串流（影響 Demo Script 5–7）：前台用 `@ai-sdk/react` 的 `useChat`，後端回 AI SDK 的 UI message stream；出處以 data part 跟著同一個串流送到前台，不另開請求
-- 上傳是同步處理（影響 Demo Script 3）：上傳請求等切段與 embedding 都完成才回應，回應後那筆才出現在列表；13 份檔案預估幾十秒內完成，上傳期間按鈕顯示「處理中…」
+- 上傳是同步處理（影響 Demo Script 3）：上傳請求等切段與 embedding 都完成才回應，回應後那筆才出現在列表；每批（最多 10 份）預估幾十秒內完成，上傳期間按鈕顯示「處理中…」
 - 測試分兩層（影響全部 Acceptance criteria）：單元與 server 測試用 AI SDK 的 mock 模型，不打 AI Gateway，CI 照常跑；answer key 的 Playwright E2E 會透過 AI Gateway 打真的模型，標成 `@live`、用 `npm run test:live` 跑，沒有 `AI_GATEWAY_API_KEY` 時自動略過，在本機手動跑
 - 後台段落檢視（影響 Demo Script 3）：列表每筆文件可以展開「查看段落」，列出每個 chunk 的標題路徑（PDF 為頁碼）與前 80 字，用來檢查切法；唯讀，不能編輯
-- 單檔上限 10 MB
+- 上傳上限：每次最多 10 份、單檔最多 5 MB（server 已實作：超過份數回 400、超過大小回 413）。只在記憶體暫存上傳內容，所以設上限；demo 最大的檔案是 0.5 MB 的 PDF
 - answer-key 的期望答案是我直接讀 wiki 原文寫的，客戶確認前都算假設
 
 ## Out of Scope
