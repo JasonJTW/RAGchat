@@ -12,6 +12,8 @@
 - Tests sit next to the code as `*.test.ts(x)`. Server tests import `app` from `server/src/app.ts` and hit it with supertest; `server/src/index.ts` only calls `listen`.
 - E2E specs live in `web/e2e/*.spec.ts`; Vitest ignores that folder.
 - The pre-commit hook (`lefthook.yml`) formats and lints staged files, then runs `npm run typecheck` and `npm test`. The pre-push hook refuses pushes to `main`, then runs `npm run test:e2e`. Changes reach `main` through a PR: CI and the Claude reviews are required checks. Fix failures; never bypass either hook with `--no-verify`.
+- After opening a PR, enable auto-merge: `gh pr merge --auto --squash <PR>`. GitHub then merges it once the required checks pass. Skip this for draft PRs, or when the user says to hold the merge.
+- If auto-merge stalls on a failing check, fix the failure and push. Never merge manually past a red check.
 - A behaviour change ships with a test.
 - `server/openapi.yaml` is the API contract. Update it in the same change as any route.
 
