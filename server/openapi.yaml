@@ -114,7 +114,7 @@ paths:
       description: >
         Responds once every file is chunked, embedded, and saved. Markdown is
         split by heading; other formats get 0 chunks for now. All or nothing:
-        if embedding any file fails, none are added.
+        if embedding or saving fails, none of the files are added.
       requestBody:
         required: true
         content:
@@ -148,8 +148,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-        "502":
-          description: Embedding failed; none of the files were added
+        "500":
+          description: Embedding or saving failed; none of the files were added
           content:
             application/json:
               schema:

@@ -74,7 +74,7 @@ export function listChunks(id: string): ChunkSummary[] | undefined {
 
 /**
  * Chunks and embeds every file, then stores them all at once. Resolves once
- * they are saved; if embedding any file fails, rejects and stores none.
+ * they are saved; if embedding or saving fails, rejects and stores none.
  */
 export async function addDocuments(
   files: { filename: string; bytes: Buffer }[],
@@ -93,7 +93,12 @@ export async function addDocuments(
     });
   }
   documents.push(...added);
-  save();
+  try {
+    save();
+  } catch (error) {
+    documents.splice(documents.length - added.length); // nothing stays half-added
+    throw error;
+  }
   const ids = new Set(added.map((doc) => doc.id));
   return listDocuments().filter((summary) => ids.has(summary.id));
 }

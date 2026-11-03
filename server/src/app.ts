@@ -42,8 +42,8 @@ app.get("/api/documents/:id/chunks", (req, res) => {
   res.json(chunks);
 });
 
-// Responds only once every file is chunked, embedded, and saved. A failed
-// embedding stores none of the files, so a retry can't duplicate them.
+// Responds only once every file is chunked, embedded, and saved. A failure
+// stores none of the files, so a retry can't duplicate them.
 app.post("/api/documents", upload.array("files"), async (req, res) => {
   const files = ((req.files ?? []) as Express.Multer.File[]).map((file) => ({
     // multer decodes multipart filenames as latin1; restore UTF-8 names.
@@ -54,7 +54,7 @@ app.post("/api/documents", upload.array("files"), async (req, res) => {
     res.status(201).json(await addDocuments(files));
   } catch (error) {
     console.error("upload failed:", error);
-    res.status(502).json({ error: "Embedding failed; no files were added" });
+    res.status(500).json({ error: "Upload failed; no files were added" });
   }
 });
 

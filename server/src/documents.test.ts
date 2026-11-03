@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import request from "supertest";
 import { MockEmbeddingModelV4, MockProviderV4 } from "ai/test";
@@ -139,12 +140,29 @@ describe("/api/documents", () => {
       .attach("files", ...fixture("05-projects-and-practice.md"));
     installStubModels();
 
-    expect(res.status).toBe(502);
+    expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: expect.any(String) as string });
     const list = await admin.get("/api/documents");
     expect(list.body).not.toContainEqual(
       expect.objectContaining({ filename: "01-overview.md" }),
     );
+  });
+
+  it("stores none of the files when saving them fails", async () => {
+    const dataDir = mkdtempSync(path.join(tmpdir(), "kb-readonly-"));
+    const admin = await startServerAsAdmin({ DATA_DIR: dataDir });
+    chmodSync(dataDir, 0o500); // the store file can't be written
+    try {
+      const res = await admin
+        .post("/api/documents")
+        .attach("files", ...fixture("01-overview.md"));
+
+      expect(res.status).toBe(500);
+      const list = await admin.get("/api/documents");
+      expect(list.body).toEqual([]);
+    } finally {
+      chmodSync(dataDir, 0o700);
+    }
   });
 
   it("returns 404 for the chunks of an unknown document", async () => {
