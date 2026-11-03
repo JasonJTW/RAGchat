@@ -113,7 +113,8 @@ paths:
         - adminSession: []
       description: >
         Responds once every file is chunked, embedded, and saved. Markdown is
-        split by heading; other formats get 0 chunks for now.
+        split by heading; other formats get 0 chunks for now. All or nothing:
+        if embedding any file fails, none are added.
       requestBody:
         required: true
         content:
@@ -143,6 +144,12 @@ paths:
                 $ref: "#/components/schemas/Error"
         "413":
           description: A file is larger than 5 MiB
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: Embedding failed; none of the files were added
           content:
             application/json:
               schema:

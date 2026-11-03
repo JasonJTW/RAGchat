@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import request from "supertest";
+import { MockEmbeddingModelV4, MockProviderV4 } from "ai/test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installStubModels } from "./stub-models.js";
 
@@ -113,6 +114,37 @@ describe("/api/documents", () => {
     const chunks = await admin.get(`/api/documents/${doc.id}/chunks`);
     for (const chunk of chunks.body as { embeddingModel: string }[])
       expect(chunk.embeddingModel).toBe("test/model-b");
+  });
+
+  it("stores none of the files when embedding one of them fails", async () => {
+    const admin = await startServerAsAdmin();
+    const failing = new MockProviderV4();
+    failing.embeddingModel = (modelId: string) =>
+      new MockEmbeddingModelV4({
+        modelId,
+        maxEmbeddingsPerCall: 2048,
+        doEmbed: ({ values }) =>
+          values.some((v) => v.includes("05-projects"))
+            ? Promise.reject(new Error("gateway down"))
+            : Promise.resolve({
+                embeddings: values.map(() => [1, 0]),
+                warnings: [],
+              }),
+      });
+    globalThis.AI_SDK_DEFAULT_PROVIDER = failing;
+
+    const res = await admin
+      .post("/api/documents")
+      .attach("files", ...fixture("01-overview.md"))
+      .attach("files", ...fixture("05-projects-and-practice.md"));
+    installStubModels();
+
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: expect.any(String) as string });
+    const list = await admin.get("/api/documents");
+    expect(list.body).not.toContainEqual(
+      expect.objectContaining({ filename: "01-overview.md" }),
+    );
   });
 
   it("returns 404 for the chunks of an unknown document", async () => {
