@@ -4,9 +4,9 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] 上傳 10 份 md 後，answer key 的 Q2、Q4、Q5、Q9、Q11 各在新對話中問一次，回答與出處都符合 match rule
-- [ ] 點 Q4 回答下方指到「C. 移動微型空間計畫」的出處，展開的原文符合 answer key 的 C1
-- [ ] 送出後 5 秒內畫面出現第一個字，之後逐字增加
-- [ ] server 測試（mock 模型）：LLM 回答含 `[2]` 時，串流裡的出處只有第 2 段，沒被引用的段落不列
+- [x] 上傳 10 份 md 後，answer key 的 Q2、Q4、Q5、Q9、Q11 各在新對話中問一次，回答與出處都符合 match rule
+- [x] 點 Q4 回答下方指到「C. 移動微型空間計畫」的出處，展開的原文符合 answer key 的 C1
+- [x] 送出後 5 秒內畫面出現第一個字，之後逐字增加
+- [x] server 測試（mock 模型）：LLM 回答含 `[2]` 時，串流裡的出處只有第 2 段，沒被引用的段落不列

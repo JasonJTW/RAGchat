@@ -1,6 +1,7 @@
 import express, { type ErrorRequestHandler } from "express";
 import cors from "cors";
 import multer from "multer";
+import { z } from "zod";
 import { login, requireAdmin } from "./auth.js";
 import { streamAnswer } from "./chat.js";
 import { addDocuments, listChunks, listDocuments } from "./documents.js";
@@ -21,8 +22,39 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/api/chat", async (_req, res) => {
-  await streamAnswer(res);
+// The chat is public, so check the shapes the server reads and cap the size.
+// Earlier answers come back in the history, so only questions are kept short.
+const chatMessage = (role: z.ZodType<string>, maxText: number) =>
+  z.looseObject({
+    role,
+    parts: z.array(
+      z.looseObject({
+        type: z.string(),
+        text: z.string().max(maxText).optional(),
+      }),
+    ),
+  });
+const ChatRequest = z.object({
+  messages: z
+    .array(
+      z.union([
+        chatMessage(z.literal("user"), 2000),
+        chatMessage(z.enum(["assistant", "system"]), 20000),
+      ]),
+    )
+    .max(50),
+});
+
+app.post("/api/chat", async (req, res) => {
+  const body = ChatRequest.safeParse(req.body);
+  if (!body.success) {
+    res.status(400).json({
+      error:
+        "messages must be at most 50 UI messages; a question at most 2000 characters",
+    });
+    return;
+  }
+  await streamAnswer(res, body.data.messages);
 });
 
 app.post("/api/login", login);

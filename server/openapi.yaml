@@ -23,8 +23,17 @@ paths:
       security: []
       summary: Answer a question from the uploaded documents
       description: >
+        Answers the latest user message from the 6 passages that best match
+        it (embedding cosine and BM25, merged by reciprocal rank fusion).
         Streams the answer as an AI SDK UI message stream (Server-Sent Events).
-        Citations arrive as `data-citation` parts in the same stream.
+        After the text, each passage the answer marks with `[n]` arrives as a
+        `data-citation` part in the same stream, with `data` shaped like
+        Citation. Passages the answer doesn't mark are not sent.
+        When no stored chunk is similar enough to the question (best cosine
+        similarity below 0.3), or the passages don't answer it, the answer is
+        the fixed refusal 「這個問題我無法回答，請來信客服
+        support@megaweaving.example。」 with no citations; below the
+        similarity threshold the model is not called.
       requestBody:
         required: true
         content:
@@ -36,8 +45,27 @@ paths:
                 messages:
                   type: array
                   description: AI SDK UIMessage objects, oldest first
+                  maxItems: 50
                   items:
                     type: object
+                    required: [role, parts]
+                    properties:
+                      role:
+                        type: string
+                        enum: [user, assistant, system]
+                      parts:
+                        type: array
+                        items:
+                          type: object
+                          required: [type]
+                          properties:
+                            type:
+                              type: string
+                            text:
+                              type: string
+                              description: >
+                                At most 2000 characters in a user message,
+                                20000 in other messages
       responses:
         "200":
           description: UI message stream
@@ -45,6 +73,14 @@ paths:
             text/event-stream:
               schema:
                 type: string
+        "400":
+          description: >
+            `messages` is missing or malformed, has more than 50 messages, or
+            has a text over its length limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/login:
     post:
       operationId: login
@@ -201,6 +237,22 @@ components:
       properties:
         error:
           type: string
+    Citation:
+      type: object
+      required: [id, marker, label, text]
+      properties:
+        id:
+          type: string
+        marker:
+          type: integer
+          minimum: 1
+          description: The `[n]` the answer marks the passage with
+        label:
+          type: string
+          description: "e.g. `05-projects-and-practice.md › 05 實踐案例 … › C. 移動微型空間計畫`"
+        text:
+          type: string
+          description: The passage's original text
     ChunkSummary:
       type: object
       required: [path, preview, embeddingModel]
