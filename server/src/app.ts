@@ -3,7 +3,7 @@ import cors from "cors";
 import multer from "multer";
 import { login, requireAdmin } from "./auth.js";
 import { streamAnswer } from "./chat.js";
-import { addDocument, listChunks, listDocuments } from "./documents.js";
+import { addDocuments, listChunks, listDocuments } from "./documents.js";
 
 export const app = express();
 // Uploads are buffered in memory, so cap what one request can hold.
@@ -42,16 +42,20 @@ app.get("/api/documents/:id/chunks", (req, res) => {
   res.json(chunks);
 });
 
-// Responds only once every file is chunked, embedded, and saved.
+// Responds only once every file is chunked, embedded, and saved. A failure
+// stores none of the files, so a retry can't duplicate them.
 app.post("/api/documents", upload.array("files"), async (req, res) => {
-  const files = (req.files ?? []) as Express.Multer.File[];
-  const added = [];
-  for (const file of files) {
+  const files = ((req.files ?? []) as Express.Multer.File[]).map((file) => ({
     // multer decodes multipart filenames as latin1; restore UTF-8 names.
-    const filename = Buffer.from(file.originalname, "latin1").toString("utf8");
-    added.push(await addDocument(filename, file.buffer));
+    filename: Buffer.from(file.originalname, "latin1").toString("utf8"),
+    bytes: file.buffer,
+  }));
+  try {
+    res.status(201).json(await addDocuments(files));
+  } catch (error) {
+    console.error("upload failed:", error);
+    res.status(500).json({ error: "Upload failed; no files were added" });
   }
-  res.status(201).json(added);
 });
 
 const uploadLimitHandler: ErrorRequestHandler = (err, _req, res, next) => {

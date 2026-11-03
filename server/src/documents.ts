@@ -72,24 +72,35 @@ export function listChunks(id: string): ChunkSummary[] | undefined {
     }));
 }
 
-/** Chunks and embeds the file, then stores it. Resolves once it is saved. */
-export async function addDocument(
-  filename: string,
-  bytes: Buffer,
-): Promise<DocumentSummary> {
-  const chunks = filename.toLowerCase().endsWith(".md")
-    ? chunkMarkdown(filename, bytes.toString("utf8"), countTokens)
-    : [];
-  const doc: StoredDocument = {
-    id: randomUUID(),
-    filename,
-    uploadedAt: new Date().toISOString(),
-    source: bytes.toString("base64"),
-    chunks: await embed(chunks),
-  };
-  documents.push(doc);
-  save();
-  return listDocuments().find((summary) => summary.id === doc.id)!;
+/**
+ * Chunks and embeds every file, then stores them all at once. Resolves once
+ * they are saved; if embedding or saving fails, rejects and stores none.
+ */
+export async function addDocuments(
+  files: { filename: string; bytes: Buffer }[],
+): Promise<DocumentSummary[]> {
+  const added: StoredDocument[] = [];
+  for (const { filename, bytes } of files) {
+    const chunks = filename.toLowerCase().endsWith(".md")
+      ? chunkMarkdown(filename, bytes.toString("utf8"), countTokens)
+      : [];
+    added.push({
+      id: randomUUID(),
+      filename,
+      uploadedAt: new Date().toISOString(),
+      source: bytes.toString("base64"),
+      chunks: await embed(chunks),
+    });
+  }
+  documents.push(...added);
+  try {
+    save();
+  } catch (error) {
+    documents.splice(documents.length - added.length); // nothing stays half-added
+    throw error;
+  }
+  const ids = new Set(added.map((doc) => doc.id));
+  return listDocuments().filter((summary) => ids.has(summary.id));
 }
 
 async function embed(chunks: MarkdownChunk[]): Promise<StoredChunk[]> {
