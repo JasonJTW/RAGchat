@@ -39,7 +39,8 @@ test("uploading a document adds it to the list", async ({ page }) => {
 
   const row = page.getByRole("row", { name: /01-overview\.md/ }).first();
   await expect(row).toBeVisible();
-  await expect(row.getByRole("cell", { name: "0", exact: true })).toBeVisible();
+  // 02's report: 01-overview.md splits into 6 chunks.
+  await expect(row.getByRole("cell", { name: "6", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "上傳" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "選擇檔案" })).toBeVisible();
 });

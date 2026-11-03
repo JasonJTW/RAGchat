@@ -1,4 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { embedMany } from "ai";
+import { getEncoding } from "js-tiktoken";
+import { chunkMarkdown, type MarkdownChunk } from "./markdown-chunks.js";
+import { EMBEDDING_MODEL } from "./models.js";
+
+// The document store: uploaded files, their chunks and embeddings, kept in
+// memory and persisted as one JSON file under DATA_DIR (default server/data/).
+// Swapping in a vector database later only touches this module.
 
 /** An uploaded document as listed in the admin. */
 export interface DocumentSummary {
@@ -8,20 +19,120 @@ export interface DocumentSummary {
   uploadedAt: string;
 }
 
-// Walking skeleton: documents live in memory and are not chunked yet.
-const documents: DocumentSummary[] = [];
-
-export function listDocuments(): DocumentSummary[] {
-  return documents;
+/** A chunk as shown under 查看段落 in the admin. */
+export interface ChunkSummary {
+  /** [filename, H1, H2, H3] */
+  path: string[];
+  /** The first 80 characters of the chunk's content. */
+  preview: string;
+  /** The embedding model id that produced the chunk's vector. */
+  embeddingModel: string;
 }
 
-export function addDocument(filename: string): DocumentSummary {
-  const doc: DocumentSummary = {
+interface StoredChunk extends MarkdownChunk {
+  embedding: number[];
+  embeddingModel: string;
+}
+
+interface StoredDocument {
+  id: string;
+  filename: string;
+  uploadedAt: string;
+  /** The uploaded file, base64. */
+  source: string;
+  chunks: StoredChunk[];
+}
+
+const dataDir =
+  process.env.DATA_DIR || fileURLToPath(new URL("../data/", import.meta.url));
+const storeFile = path.join(dataDir, "documents.json");
+const encoding = getEncoding("cl100k_base");
+const countTokens = (text: string) => encoding.encode(text).length;
+
+const documents: StoredDocument[] = load();
+await reembedStaleChunks();
+
+export function listDocuments(): DocumentSummary[] {
+  return documents.map((doc) => ({
+    id: doc.id,
+    filename: doc.filename,
+    chunkCount: doc.chunks.length,
+    uploadedAt: doc.uploadedAt,
+  }));
+}
+
+/** The document's chunks, or undefined when no document has that id. */
+export function listChunks(id: string): ChunkSummary[] | undefined {
+  return documents
+    .find((doc) => doc.id === id)
+    ?.chunks.map((chunk) => ({
+      path: chunk.path,
+      preview: Array.from(chunk.content).slice(0, 80).join(""),
+      embeddingModel: chunk.embeddingModel,
+    }));
+}
+
+/** Chunks and embeds the file, then stores it. Resolves once it is saved. */
+export async function addDocument(
+  filename: string,
+  bytes: Buffer,
+): Promise<DocumentSummary> {
+  const chunks = filename.toLowerCase().endsWith(".md")
+    ? chunkMarkdown(filename, bytes.toString("utf8"), countTokens)
+    : [];
+  const doc: StoredDocument = {
     id: randomUUID(),
     filename,
-    chunkCount: 0,
     uploadedAt: new Date().toISOString(),
+    source: bytes.toString("base64"),
+    chunks: await embed(chunks),
   };
   documents.push(doc);
-  return doc;
+  save();
+  return listDocuments().find((summary) => summary.id === doc.id)!;
+}
+
+async function embed(chunks: MarkdownChunk[]): Promise<StoredChunk[]> {
+  if (chunks.length === 0) return [];
+  const { embeddings } = await embedMany({
+    model: EMBEDDING_MODEL,
+    values: chunks.map((chunk) => chunk.embedText),
+  });
+  return chunks.map((chunk, i) => ({
+    ...chunk,
+    embedding: embeddings[i],
+    embeddingModel: EMBEDDING_MODEL,
+  }));
+}
+
+// Vectors from different models can't be compared, so a changed
+// EMBEDDING_MODEL re-embeds every chunk at startup.
+async function reembedStaleChunks() {
+  const stale = documents.filter((doc) =>
+    doc.chunks.some((chunk) => chunk.embeddingModel !== EMBEDDING_MODEL),
+  );
+  if (stale.length === 0) return;
+  for (const doc of stale) doc.chunks = await embed(doc.chunks);
+  save();
+}
+
+function load(): StoredDocument[] {
+  try {
+    return (
+      JSON.parse(readFileSync(storeFile, "utf8")) as {
+        documents: StoredDocument[];
+      }
+    ).documents;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+function save() {
+  mkdirSync(dataDir, { recursive: true });
+  // Write then rename, so a crash mid-write never leaves half a file.
+  const tmp = `${storeFile}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ documents }));
+  renameSync(tmp, storeFile);
 }

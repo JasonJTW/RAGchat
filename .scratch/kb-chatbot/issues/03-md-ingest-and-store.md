@@ -4,13 +4,13 @@
 
 **Blocked by:** 01, 02
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] 上傳 `fixtures/upload/05-projects-and-practice.md` 後，列表段落數等於 02 報告記的數字
-- [ ] 展開 05 的「查看段落」，有一段的標題路徑是「05-projects-and-practice.md › 05 實踐案例 Projects & Practice › C. 移動微型空間計畫」，前 80 字含表頭「計畫｜期間｜站數（截至 2023）」
-- [ ] 展開 03-timeline 的「查看段落」，「理念實踐期（2008–2014）」那張表若被切成多段，每段開頭都重複表頭
-- [ ] 重啟 server 後重新整理 `/admin`，列表和段落數不變
-- [ ] server 測試（mock embedding 模型）：把 `EMBEDDING_MODEL` 換成另一個 id 再啟動，所有 chunk 都被重新 embedding，且記錄的模型 id 是新的
+- [x] 上傳 `fixtures/upload/05-projects-and-practice.md` 後，列表段落數等於 02 報告記的數字
+- [x] 展開 05 的「查看段落」，有一段的標題路徑是「05-projects-and-practice.md › 05 實踐案例 Projects & Practice › C. 移動微型空間計畫」，前 80 字含表頭「計畫｜期間｜站數（截至 2023）」
+- [x] 展開 03-timeline 的「查看段落」，「理念實踐期（2008–2014）」那張表若被切成多段，每段開頭都重複表頭
+- [x] 重啟 server 後重新整理 `/admin`，列表和段落數不變
+- [x] server 測試（mock embedding 模型）：把 `EMBEDDING_MODEL` 換成另一個 id 再啟動，所有 chunk 都被重新 embedding，且記錄的模型 id 是新的
 
 ## 02 定案的切法
 

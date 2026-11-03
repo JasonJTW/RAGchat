@@ -111,6 +111,9 @@ paths:
       summary: Upload one or more documents (at most 10 files, 5 MiB each)
       security:
         - adminSession: []
+      description: >
+        Responds once every file is chunked, embedded, and saved. Markdown is
+        split by heading; other formats get 0 chunks for now.
       requestBody:
         required: true
         content:
@@ -146,6 +149,31 @@ paths:
                 $ref: "#/components/schemas/Error"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /api/documents/{id}/chunks:
+    get:
+      operationId: listDocumentChunks
+      summary: List a document's chunks, in document order
+      security:
+        - adminSession: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The document's chunks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ChunkSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No document has that id
 components:
   securitySchemes:
     adminSession:
@@ -166,6 +194,21 @@ components:
       properties:
         error:
           type: string
+    ChunkSummary:
+      type: object
+      required: [path, preview, embeddingModel]
+      properties:
+        path:
+          type: array
+          description: "[filename, H1, H2, H3]"
+          items:
+            type: string
+        preview:
+          type: string
+          description: The first 80 characters of the chunk
+        embeddingModel:
+          type: string
+          description: The embedding model id that produced the chunk's vector
     DocumentSummary:
       type: object
       required: [id, filename, chunkCount, uploadedAt]

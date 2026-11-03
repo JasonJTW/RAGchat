@@ -1,5 +1,13 @@
-import { app } from "./app.js";
 import { adminPasswordMissing } from "./auth.js";
+
+// E2E runs without a model key: STUB_MODELS=1 swaps the AI Gateway for fixed
+// fake embeddings. Installed before the app loads, since loading the document
+// store may re-embed.
+if (process.env.STUB_MODELS === "1") {
+  const { installStubModels } = await import("./stub-models.js");
+  installStubModels();
+}
+const { app } = await import("./app.js");
 
 const port = Number(process.env.PORT ?? 4000);
 

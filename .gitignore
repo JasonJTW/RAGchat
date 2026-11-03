@@ -2,6 +2,7 @@ node_modules/
 .next/
 .next-e2e/
 dist/
+server/data/
 .env
 .env*.local
 .DS_Store

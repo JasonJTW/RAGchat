@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,11 @@ interface DocumentSummary {
   filename: string;
   chunkCount: number;
   uploadedAt: string;
+}
+
+interface ChunkSummary {
+  path: string[];
+  preview: string;
 }
 
 /** The admin session is missing or expired (the server restarted). */
@@ -44,6 +49,7 @@ export function DocumentAdmin() {
   const [selected, setSelected] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
 
   function clearSelection() {
     setSelected([]);
@@ -119,18 +125,64 @@ export function DocumentAdmin() {
             <th>檔名</th>
             <th>段落數</th>
             <th>上傳時間</th>
+            <th />
           </tr>
         </thead>
         <tbody>
           {documents.map((doc) => (
-            <tr key={doc.id}>
-              <td>{doc.filename}</td>
-              <td>{doc.chunkCount}</td>
-              <td>{new Date(doc.uploadedAt).toLocaleString("zh-TW")}</td>
-            </tr>
+            <Fragment key={doc.id}>
+              <tr>
+                <td>{doc.filename}</td>
+                <td>{doc.chunkCount}</td>
+                <td>{new Date(doc.uploadedAt).toLocaleString("zh-TW")}</td>
+                <td>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    aria-expanded={expanded === doc.id}
+                    onClick={() =>
+                      setExpanded(expanded === doc.id ? null : doc.id)
+                    }
+                  >
+                    查看段落
+                  </Button>
+                </td>
+              </tr>
+              {expanded === doc.id && (
+                <tr>
+                  <td colSpan={4}>
+                    <ChunkList document={doc} />
+                  </td>
+                </tr>
+              )}
+            </Fragment>
           ))}
         </tbody>
       </table>
     </div>
+  );
+}
+
+/** Read-only view of a document's chunks: heading path and first 80 characters. */
+function ChunkList({ document }: { document: DocumentSummary }) {
+  const { data: chunks } = useSWR<ChunkSummary[]>(
+    `/api/documents/${document.id}/chunks`,
+    fetchJson,
+  );
+  if (!chunks) return <p className="text-muted-foreground">載入中…</p>;
+  return (
+    <ol
+      aria-label={`${document.filename} 的段落`}
+      className="flex flex-col gap-3 py-2"
+    >
+      {chunks.map((chunk, i) => (
+        <li key={i}>
+          <h3 className="font-medium">{chunk.path.join(" › ")}</h3>
+          <p className="text-muted-foreground whitespace-pre-wrap">
+            {chunk.preview}
+          </p>
+        </li>
+      ))}
+    </ol>
   );
 }
