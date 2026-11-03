@@ -24,7 +24,6 @@ _最後更新：2026-11-03_
 蕭有志 2008 年返台後，讓**教學、設計方案、非營利工作營、藝術創作**四條路線同時進行、彼此交錯，並把資源交換模式嫁接到一般資本市場的方案運作中，讓不少方案「在極低限的預算中卻也能轉化出豐碩的成果」。〔🅐 [About Megaweave](https://yuchih-hsiao.net/About-Megaweave)〕
 
 代表案例：
-
 - 一百元的大直社區改造計畫（2008–2012）
 - 搖籃書房（2009）
 - 旅行的大洋蔥（2009/2010–2019）
@@ -57,13 +56,13 @@ _最後更新：2026-11-03_
 
 ## 名稱寫法對照
 
-| 寫法                        | 出現場合                                                |
-| --------------------------- | ------------------------------------------------------- |
-| 大量交織                    | 中文通用名、FB 社團名                                   |
-| Megaweaving                 | 英文通用、FB 社團英文名、平台網域                       |
-| Mega-weave / mega-weave     | 2010 看守台灣文章、忠泰美術館講者介紹                   |
-| Mega-weaving / mega weaving | Flickr 相簿、課程主題                                   |
-| Mega Weaving                | 作品標題（Mega Weaving—Take It Home If You Like It II） |
-| Megaweave                   | 個人網站頁面 URL（/About-Megaweave）、GitHub repo 名稱  |
-| 大合設計 Megaweaving Design | 蕭有志的設計公司英文名                                  |
-| magaweaving                 | Flickr 帳號網址拼法（疑似筆誤，顯示名稱為 Megaweaving） |
+| 寫法 | 出現場合 |
+|---|---|
+| 大量交織 | 中文通用名、FB 社團名 |
+| Megaweaving | 英文通用、FB 社團英文名、平台網域 |
+| Mega-weave / mega-weave | 2010 看守台灣文章、忠泰美術館講者介紹 |
+| Mega-weaving / mega weaving | Flickr 相簿、課程主題 |
+| Mega Weaving | 作品標題（Mega Weaving—Take It Home If You Like It II） |
+| Megaweave | 個人網站頁面 URL（/About-Megaweave）、GitHub repo 名稱 |
+| 大合設計 Megaweaving Design | 蕭有志的設計公司英文名 |
+| magaweaving | Flickr 帳號網址拼法（疑似筆誤，顯示名稱為 Megaweaving） |

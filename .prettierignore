@@ -1,0 +1,3 @@
+
+# POC fixtures mirror the client's files byte for byte
+.scratch/*/fixtures/

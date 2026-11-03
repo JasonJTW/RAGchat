@@ -3,7 +3,6 @@
 _最後更新：2026-11-03_
 
 主要來源：
-
 - 🅐 網站首頁 https://megaweaving.net/ 、英文版 https://megaweaving.net/en （2026-11-03 擷取）
 - 🅐 GitHub 公開 repo https://github.com/JasonJTW/megaweave （README，以及 GitHub API 中繼資料，2026-11-03 查詢）
 - 🅑 Substack／AYAD，2026-10-02 https://oxo816phoenix.substack.com/p/megaweaving
@@ -19,29 +18,29 @@ _最後更新：2026-11-03_
 
 ## 核心流程（README）
 
-| 角色／物件       | 意義                                                                          |
-| ---------------- | ----------------------------------------------------------------------------- |
-| **Share**        | 「我有這個，拿去吧」                                                          |
-| **Wish**         | 「我在找這個」                                                                |
-| **Weave**        | 由另一方發起的一次交換：請求 → 核准 → 雙方確認 → 完成；可細到貼文中的個別物品 |
-| Giver / Receiver | 交換雙方角色（定義在 repo 的 `CONTEXT.md`）                                   |
+| 角色／物件 | 意義 |
+|---|---|
+| **Share** | 「我有這個，拿去吧」 |
+| **Wish** | 「我在找這個」 |
+| **Weave** | 由另一方發起的一次交換：請求 → 核准 → 雙方確認 → 完成；可細到貼文中的個別物品 |
+| Giver / Receiver | 交換雙方角色（定義在 repo 的 `CONTEXT.md`） |
 
 - 交換本身**免費**，不涉及金錢。
 - 唯一付費路徑：雙方無法面交時，可選用 **Lalamove 快遞配送**，以 **ECPay** 付款；快遞 webhook 遺失時，由對帳（reconciliation）工作補單。
 
 ## 網站可見功能（2026-11-03）
 
-| 功能     | 中文 UI                                         | 英文 UI                               | 狀態                                                          |
-| -------- | ----------------------------------------------- | ------------------------------------- | ------------------------------------------------------------- |
-| 發布需求 | + 許願                                          | + Wish                                | 上線                                                          |
-| 發布分享 | + 分享                                          | + Share                               | 上線                                                          |
-| 公共物品 | 地球公物                                        | Commons                               | **即將推出（Coming soon）**                                   |
-| 搜尋     | 搜尋欄                                          | Search                                | 上線                                                          |
-| 篩選     | 僅看許願／僅看分享／隱藏已過期/已結束           | Wish Only / Share Only / Hide Overdue | 上線                                                          |
-| 語言     | 繁體中文／English                               | —                                     | 上線                                                          |
-| 導覽     | 關於我們（/about）、團隊介紹（/about#our-team） | About Us、megaweaving Team            | 頁面靠 JS 載入（擷取時顯示「載入織友中...」），團隊名單未取得 |
-| 社群連結 | FB 社團、IG @studio_megaweaving                 | 同左                                  | 上線                                                          |
-| 頁尾     | © megaweaving 2025；隱私權政策、服務條款        | 同左                                  | 條款連結目前都指向 `#`（尚未設置）                            |
+| 功能 | 中文 UI | 英文 UI | 狀態 |
+|---|---|---|---|
+| 發布需求 | + 許願 | + Wish | 上線 |
+| 發布分享 | + 分享 | + Share | 上線 |
+| 公共物品 | 地球公物 | Commons | **即將推出（Coming soon）** |
+| 搜尋 | 搜尋欄 | Search | 上線 |
+| 篩選 | 僅看許願／僅看分享／隱藏已過期/已結束 | Wish Only / Share Only / Hide Overdue | 上線 |
+| 語言 | 繁體中文／English | — | 上線 |
+| 導覽 | 關於我們（/about）、團隊介紹（/about#our-team） | About Us、megaweaving Team | 頁面靠 JS 載入（擷取時顯示「載入織友中...」），團隊名單未取得 |
+| 社群連結 | FB 社團、IG @studio_megaweaving | 同左 | 上線 |
+| 頁尾 | © megaweaving 2025；隱私權政策、服務條款 | 同左 | 條款連結目前都指向 `#`（尚未設置） |
 
 ## 功能清單（README 所述）
 
@@ -53,16 +52,15 @@ _最後更新：2026-11-03_
 
 ## 技術架構（README）
 
-| 層級     | 技術                                                                                   |
-| -------- | -------------------------------------------------------------------------------------- |
-| 前端     | Next.js 16（App Router）、React 19、TypeScript、Tailwind、Radix UI、SWR、Framer Motion |
-| 後端     | Node.js、Express、TypeScript、Socket.IO、BullMQ、Zod                                   |
-| 資料     | MySQL 8、Redis 7、Redis Stack（RediSearch + HNSW）                                     |
-| 外部服務 | AWS S3 / CloudFront / Lambda、OpenAI embeddings、Resend、ECPay、Lalamove、Google Maps  |
-| 基礎設施 | Terraform（另一個 infra repo）、Docker Compose、GitHub Actions → GHCR → EC2、Sentry    |
+| 層級 | 技術 |
+|---|---|
+| 前端 | Next.js 16（App Router）、React 19、TypeScript、Tailwind、Radix UI、SWR、Framer Motion |
+| 後端 | Node.js、Express、TypeScript、Socket.IO、BullMQ、Zod |
+| 資料 | MySQL 8、Redis 7、Redis Stack（RediSearch + HNSW） |
+| 外部服務 | AWS S3 / CloudFront / Lambda、OpenAI embeddings、Resend、ECPay、Lalamove、Google Maps |
+| 基礎設施 | Terraform（另一個 infra repo）、Docker Compose、GitHub Actions → GHCR → EC2、Sentry |
 
 設計決策重點：
-
 - 三個 Redis 實例（快取／工作佇列／向量索引）分開，各自採用不同的淘汰策略
 - 動態「先排序、後補資料」：只對當頁約 12 篇貼文做昂貴的多表 join
 - API 與 worker 共用映像檔；7 個 BullMQ 佇列（embedding、圖片、email、排名、配送對帳等）
@@ -71,17 +69,17 @@ _最後更新：2026-11-03_
 
 ## 開發時間線（GitHub API，2026-11-03 查詢）
 
-| 項目                | 值                                                                                |
-| ------------------- | --------------------------------------------------------------------------------- |
-| Repo 擁有者         | JasonJTW                                                                          |
-| Repo 建立           | 2025-06-21T16:23:27Z                                                              |
-| 第一個 commit       | 2025-06-23T04:43:48Z — `feat(Initialize): Initialize app with core auth function` |
-| 最近一次 push       | 2026-10-30T11:16:35Z                                                              |
-| main 分支 commit 數 | 648                                                                               |
-| Open issues         | 53                                                                                |
-| Stars / Forks       | 1 / 0                                                                             |
-| 主要語言            | TypeScript                                                                        |
-| License             | 未列出                                                                            |
+| 項目 | 值 |
+|---|---|
+| Repo 擁有者 | JasonJTW |
+| Repo 建立 | 2025-06-21T16:23:27Z |
+| 第一個 commit | 2025-06-23T04:43:48Z — `feat(Initialize): Initialize app with core auth function` |
+| 最近一次 push | 2026-10-30T11:16:35Z |
+| main 分支 commit 數 | 648 |
+| Open issues | 53 |
+| Stars / Forks | 1 / 0 |
+| 主要語言 | TypeScript |
+| License | 未列出 |
 
 ## 與 FB 社團的關係
 
