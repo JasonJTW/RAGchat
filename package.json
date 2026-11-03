@@ -1,0 +1,26 @@
+{
+  "name": "ai-starter",
+  "private": true,
+  "workspaces": [
+    "web",
+    "server"
+  ],
+  "scripts": {
+    "dev": "concurrently -n web,server -c blue,green \"npm run dev -w web\" \"npm run dev -w server\"",
+    "dev:web": "npm run dev -w web",
+    "dev:server": "npm run dev -w server",
+    "build": "npm run build -w web && npm run build -w server",
+    "lint": "npm run lint --workspaces",
+    "test": "npm test --workspaces",
+    "format": "prettier --write .",
+    "test:e2e": "npm run test:e2e -w web",
+    "prepare": "lefthook install",
+    "typecheck": "npm run typecheck --workspaces",
+    "postinstall": "npm exec -w web -- playwright install chromium"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.6",
+    "lefthook": "^2.2.2",
+    "prettier": "^3.9.10"
+  }
+}

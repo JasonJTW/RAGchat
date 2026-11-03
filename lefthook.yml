@@ -1,0 +1,33 @@
+pre-commit:
+  commands:
+    format:
+      glob: "*.{js,mjs,cjs,ts,mts,cts,tsx,json,md,yml,yaml,css}"
+      run: npx prettier --write --ignore-unknown {staged_files}
+      stage_fixed: true
+    lint-web:
+      root: "web/"
+      glob: "*.{js,mjs,ts,mts,tsx}"
+      run: npx eslint --fix {staged_files}
+      stage_fixed: true
+    lint-server:
+      root: "server/"
+      glob: "*.{js,mjs,ts,mts}"
+      run: npx eslint --fix {staged_files}
+      stage_fixed: true
+    typecheck:
+      run: npm run typecheck
+    test:
+      run: npm test
+
+pre-push:
+  piped: true # stop at the first failure, in order
+  jobs:
+    - name: no-push-to-main
+      use_stdin: true
+      run: |
+        if grep -q ' refs/heads/main '; then
+          echo "main is protected: push a branch and open a PR (gh pr create --fill)."
+          exit 1
+        fi
+    - name: e2e
+      run: npm run test:e2e

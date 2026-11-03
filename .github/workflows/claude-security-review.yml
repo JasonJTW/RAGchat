@@ -1,0 +1,89 @@
+name: Claude Security Review
+
+# Required status check (see the main ruleset). No workflow-level `paths` filter:
+# a required check that never reports blocks the PR, so irrelevant PRs pass in-job.
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+concurrency:
+  group: claude-security-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  claude-security-review:
+    name: Claude Security Review
+    # Fork PRs never receive secrets; a skipped job reports success.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+    env:
+      HAS_CLAUDE_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+
+    steps:
+      - name: Require CLAUDE_CODE_OAUTH_TOKEN
+        if: env.HAS_CLAUDE_TOKEN != 'true'
+        run: |
+          echo "::error::Secret CLAUDE_CODE_OAUTH_TOKEN is not set. Run: claude setup-token, then gh secret set CLAUDE_CODE_OAUTH_TOKEN"
+          exit 1
+
+      - name: Check for security-relevant changes
+        id: changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if gh pr diff "$PR" -R "$GITHUB_REPOSITORY" --name-only | grep -qE '^(server/src/|web/src/app/api/|web/src/middleware\.ts|web/next\.config\.ts|\.github/workflows/)'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::No security-relevant changes; skipping review."
+          fi
+
+      - name: Checkout repository
+        if: steps.changes.outputs.relevant == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Security Review
+        id: review
+        if: steps.changes.outputs.relevant == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          use_sticky_comment: true
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Security-review this PR against docs/agents/security-review.md.
+            Batch tool calls: read every file you need in one turn, then post all inline comments in one turn.
+            Done when every checklist item is checked for every changed file and each confirmed issue is posted as an inline comment.
+            Return blocking=true when any finding is blocking as defined in docs/agents/security-review.md, with a one-line summary of the blocking findings.
+          claude_args: |
+            --model claude-sonnet-5-5
+            --max-turns 25
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Read,Grep,Glob,Bash(gh pr diff:*),Bash(gh pr view:*)"
+            --json-schema '{"type":"object","properties":{"blocking":{"type":"boolean"},"summary":{"type":"string"}},"required":["blocking","summary"]}'
+
+      # The verdict travels through env, never interpolated into the script.
+      - name: Enforce verdict
+        if: steps.changes.outputs.relevant == 'true'
+        env:
+          VERDICT: ${{ steps.review.outputs.structured_output }}
+        run: |
+          if [ -z "$VERDICT" ]; then
+            echo "::error::No review verdict returned; see the Claude step log."
+            exit 1
+          fi
+          if [ "$(jq -r '.blocking' <<<"$VERDICT")" != "false" ]; then
+            echo "::error::Blocking review findings: $(jq -r '.summary' <<<"$VERDICT" | tr '\n' ' ')"
+            exit 1
+          fi
