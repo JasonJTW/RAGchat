@@ -31,23 +31,24 @@ export function DocumentAdmin() {
   );
   const input = useRef<HTMLInputElement>(null);
   const hydrated = useHydrated();
+  const [selected, setSelected] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  function clearSelection() {
+    setSelected([]);
+    if (input.current) input.current.value = "";
+  }
+
   async function upload() {
-    const files = input.current?.files;
-    if (!files?.length) {
-      setError("請先選擇檔案");
-      return;
-    }
     const body = new FormData();
-    for (const file of files) body.append("files", file);
+    for (const file of selected) body.append("files", file);
     setError(null);
     setUploading(true);
     try {
       const res = await fetch("/api/documents", { method: "POST", body });
       if (!res.ok) throw new Error(`upload failed: ${res.status}`);
-      if (input.current) input.current.value = "";
+      clearSelection();
       await mutate();
     } catch {
       setError("上傳失敗，請再試一次");
@@ -58,12 +59,45 @@ export function DocumentAdmin() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center gap-2">
-        <input ref={input} type="file" multiple aria-label="選擇檔案" />
-        <Button onClick={upload} disabled={!hydrated || uploading}>
-          {uploading ? "處理中…" : "上傳"}
+      <input
+        ref={input}
+        type="file"
+        multiple
+        hidden
+        onChange={(e) => {
+          setError(null);
+          setSelected(Array.from(e.currentTarget.files ?? []));
+        }}
+      />
+      {selected.length === 0 ? (
+        <Button
+          className="self-start"
+          disabled={!hydrated}
+          onClick={() => input.current?.click()}
+        >
+          選擇檔案
         </Button>
-      </div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <ul className="text-sm">
+            {selected.map((file) => (
+              <li key={file.name}>{file.name}</li>
+            ))}
+          </ul>
+          <div className="flex gap-2">
+            <Button onClick={upload} disabled={uploading}>
+              {uploading ? "處理中…" : "上傳"}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={clearSelection}
+              disabled={uploading}
+            >
+              取消
+            </Button>
+          </div>
+        </div>
+      )}
       {error && (
         <p role="alert" className="text-sm text-red-600">
           {error}
