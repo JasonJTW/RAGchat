@@ -103,7 +103,7 @@ describe("/api/documents", () => {
       .attach("files", ...fixture("05-projects-and-practice.md"));
     const [doc] = upload.body as { id: string }[];
 
-    const embedded = installStubModels();
+    const { embedded } = installStubModels();
     admin = await startServerAsAdmin({ EMBEDDING_MODEL: "test/model-b" });
 
     const list = await admin.get("/api/documents");

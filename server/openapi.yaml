@@ -23,8 +23,12 @@ paths:
       security: []
       summary: Answer a question from the uploaded documents
       description: >
+        Answers the latest user message from the 6 passages that best match
+        it (embedding cosine and BM25, merged by reciprocal rank fusion).
         Streams the answer as an AI SDK UI message stream (Server-Sent Events).
-        Citations arrive as `data-citation` parts in the same stream.
+        After the text, each passage the answer marks with `[n]` arrives as a
+        `data-citation` part in the same stream, with `data` shaped like
+        Citation. Passages the answer doesn't mark are not sent.
       requestBody:
         required: true
         content:
@@ -45,6 +49,12 @@ paths:
             text/event-stream:
               schema:
                 type: string
+        "400":
+          description: "`messages` is not an array"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/login:
     post:
       operationId: login
@@ -201,6 +211,22 @@ components:
       properties:
         error:
           type: string
+    Citation:
+      type: object
+      required: [id, marker, label, text]
+      properties:
+        id:
+          type: string
+        marker:
+          type: integer
+          minimum: 1
+          description: The `[n]` the answer marks the passage with
+        label:
+          type: string
+          description: "e.g. `05-projects-and-practice.md › 05 實踐案例 … › C. 移動微型空間計畫`"
+        text:
+          type: string
+          description: The passage's original text
     ChunkSummary:
       type: object
       required: [path, preview, embeddingModel]

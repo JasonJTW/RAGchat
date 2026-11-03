@@ -78,7 +78,9 @@ function Citations({ message }: { message: ChatMessage }) {
       {citations.map((citation) => (
         <li key={citation.id}>
           <details>
-            <summary className="cursor-pointer">{citation.label}</summary>
+            <summary className="cursor-pointer">
+              [{citation.marker}] {citation.label}
+            </summary>
             <p className="mt-1 whitespace-pre-wrap">{citation.text}</p>
           </details>
         </li>

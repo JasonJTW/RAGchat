@@ -1,5 +1,6 @@
 import express, { type ErrorRequestHandler } from "express";
 import cors from "cors";
+import type { UIMessage } from "ai";
 import multer from "multer";
 import { login, requireAdmin } from "./auth.js";
 import { streamAnswer } from "./chat.js";
@@ -21,8 +22,13 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/api/chat", async (_req, res) => {
-  await streamAnswer(res);
+app.post("/api/chat", async (req, res) => {
+  const { messages } = req.body as { messages?: unknown };
+  if (!Array.isArray(messages)) {
+    res.status(400).json({ error: "messages must be an array" });
+    return;
+  }
+  await streamAnswer(res, messages as UIMessage[]);
 });
 
 app.post("/api/login", login);

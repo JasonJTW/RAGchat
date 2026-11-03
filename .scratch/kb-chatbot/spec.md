@@ -45,6 +45,7 @@
 - 回答一律用繁體中文；使用者用英文問也回繁中
 - LLM 呼叫一律走 Vercel AI SDK（`ai` 套件的 `streamText`、`generateText`、`embedMany`、`embed`），透過 Vercel AI Gateway 連模型：Gateway 是 AI SDK 預設的全域 provider，模型直接寫成 `<廠商>/<模型>` 字串，程式裡不 import 任何廠商套件（不用 `@ai-sdk/openai`）（影響 Demo Script 5–8）
   - 聊天模型：`CHAT_MODEL`，預設 `openai/gpt-5-mini`；追問改寫也用同一個
+  - 聊天以 `reasoningEffort: minimal` 呼叫 OpenAI 推理模型：預設強度下第一個字要約 7 秒，超過 5 秒的要求；minimal 約 2.5 秒（含問題 embedding 約 1 秒），answer key 仍全數符合
   - Embedding 模型：`EMBEDDING_MODEL`，預設 `openai/text-embedding-3-small`
   - 金鑰：只要根目錄 `.env` 的 `AI_GATEWAY_API_KEY`；換成 `anthropic/…`、`google/…` 等模型只改環境變數字串，不用裝套件、不用各家金鑰
   - 模型字串只在 server 啟動時從環境變數讀一次，集中在一個模組；聊天、改寫、embedding 都從那裡拿

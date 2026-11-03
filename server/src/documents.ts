@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { embedMany } from "ai";
+import { embed as embedOne, embedMany } from "ai";
 import { getEncoding } from "js-tiktoken";
+import { hybridSearch } from "./hybrid-search.js";
 import { chunkMarkdown, type MarkdownChunk } from "./markdown-chunks.js";
 import { EMBEDDING_MODEL } from "./models.js";
 
@@ -27,6 +28,15 @@ export interface ChunkSummary {
   preview: string;
   /** The embedding model id that produced the chunk's vector. */
   embeddingModel: string;
+}
+
+/** A chunk retrieved for a question, as cited under an answer. */
+export interface Passage {
+  id: string;
+  /** e.g. "05-projects-and-practice.md › 05 實踐案例 … › C. 移動微型空間計畫" */
+  label: string;
+  /** The chunk's original text, shown when the citation is expanded. */
+  text: string;
 }
 
 interface StoredChunk extends MarkdownChunk {
@@ -70,6 +80,38 @@ export function listChunks(id: string): ChunkSummary[] | undefined {
       preview: Array.from(chunk.content).slice(0, 80).join(""),
       embeddingModel: chunk.embeddingModel,
     }));
+}
+
+/** The chunks that best match the question, best first. */
+export async function retrieve(
+  question: string,
+  limit: number,
+): Promise<Passage[]> {
+  const chunks = documents.flatMap((doc) =>
+    doc.chunks.map((chunk, i) => ({ doc, chunk, i })),
+  );
+  if (chunks.length === 0) return [];
+  const { embedding } = await embedOne({
+    model: EMBEDDING_MODEL,
+    value: question,
+  });
+  const ranked = hybridSearch(
+    chunks.map(({ chunk }) => ({
+      text: chunk.embedText,
+      embedding: chunk.embedding,
+    })),
+    question,
+    embedding,
+    limit,
+  );
+  return ranked.map((index) => {
+    const { doc, chunk, i } = chunks[index];
+    return {
+      id: `${doc.id}:${i}`,
+      label: chunk.path.join(" › "),
+      text: chunk.content,
+    };
+  });
 }
 
 /**
