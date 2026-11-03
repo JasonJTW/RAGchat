@@ -133,7 +133,12 @@ export function DocumentAdmin() {
             <Fragment key={doc.id}>
               <tr>
                 <td>{doc.filename}</td>
-                <td>{doc.chunkCount}</td>
+                <td>
+                  {doc.chunkCount}
+                  {doc.chunkCount === 0 && (
+                    <span className="ml-2 text-red-600">無法抽出文字</span>
+                  )}
+                </td>
                 <td>{new Date(doc.uploadedAt).toLocaleString("zh-TW")}</td>
                 <td>
                   <Button

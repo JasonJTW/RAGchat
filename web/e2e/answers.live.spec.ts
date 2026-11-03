@@ -9,6 +9,12 @@ import { ask } from "./ask";
 // with the file and includes every heading.
 const ANSWER_KEY = [
   {
+    id: "Q1",
+    question: "在 megaweaving.net 交換物品要付錢嗎？",
+    contains: ["免費", "Lalamove", "ECPay"],
+    cites: ["faq.txt", "07-megaweaving-net-platform.md › 核心流程（README）"],
+  },
+  {
     id: "Q2",
     question: "一百元的大直社區改造計畫，每個學生最多可以花多少錢？",
     contains: [["100 元", "一百元"], "廢料"],
@@ -32,6 +38,27 @@ const ANSWER_KEY = [
     ],
   },
   {
+    id: "Q6",
+    question: "搜尋一定要用中文關鍵字嗎？",
+    contains: ["語意", ["跨語言", "英文"]],
+    cites: [
+      "faq.txt",
+      "07-megaweaving-net-platform.md › 功能清單（README 所述）",
+    ],
+  },
+  {
+    id: "Q7",
+    question: "蕭有志有沒有在日本的大學教過線上課？",
+    contains: ["東京理科大學", "2021"],
+    cites: ["04-founder-hsiao-yu-chih.pdf › 第 2 頁"],
+  },
+  {
+    id: "Q8",
+    question: "蕭有志個人網站上的作品分成哪幾類？各有幾件？",
+    contains: ["方案 24", "實驗室系列 39", "展覽 10", "工作營 17"],
+    cites: ["04-founder-hsiao-yu-chih.pdf › 第 4 頁"],
+  },
+  {
     id: "Q9",
     question: "大量交織的 FB 社團現在有多少成員？",
     contains: ["12000", "8000", ["11k", "11000", "1.1 萬"]],
@@ -49,6 +76,15 @@ const ANSWER_KEY = [
     ],
     cites: ["02-origin-philosophy.md › 2.5 五個關鍵字"],
   },
+  {
+    id: "Q10",
+    question: "我想去拿別人分享的東西，取件前要先確認什麼？",
+    contains: ["物品狀況", "取件方式", "仍可索取"],
+    cites: [
+      "pickup-notice.txt",
+      "06-facebook-community.md › 使用規範（平台／文章所述）",
+    ],
+  },
 ];
 
 const MARKDOWN = [
@@ -63,6 +99,8 @@ const MARKDOWN = [
   "09-sources.md",
   "10-discrepancies-open-questions.md",
 ];
+
+const OTHERS = ["04-founder-hsiao-yu-chih.pdf", "faq.txt", "pickup-notice.txt"];
 
 // The answer key's normalisation: no thousands separators, dates as
 // YYYY-MM-DD, 五站 = 5 站; plus no whitespace and lowercase.
@@ -91,10 +129,10 @@ test.describe("answer key @live", () => {
     await logIn(page);
     // A retried worker re-runs this hook; don't upload twice.
     await expect(page.getByRole("table")).toHaveAttribute("aria-busy", "false");
-    if (
-      (await page.getByRole("row", { name: /01-overview\.md/ }).count()) === 0
-    )
-      await upload(page, ...MARKDOWN);
+    // The demo's two batches: the 10 markdown files, then the other 3.
+    for (const batch of [MARKDOWN, OTHERS])
+      if ((await page.getByRole("row", { name: batch[0] }).count()) === 0)
+        await upload(page, ...batch);
     await page.close();
   });
 
