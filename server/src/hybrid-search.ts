@@ -12,25 +12,31 @@ export interface Searchable {
   embedding: number[];
 }
 
-/** Indexes into `items` of the best `limit` matches, best first. */
+/**
+ * Indexes into `items` of the best `limit` matches, best first, and the
+ * highest cosine similarity of any item to the query (0 when there are none).
+ * RRF scores only reflect rank, so the similarity is what says how well the
+ * best match fits.
+ */
 export function hybridSearch(
   items: Searchable[],
   query: string,
   queryVector: number[],
   limit: number,
-): number[] {
+): { ranked: number[]; similarity: number } {
+  const similarities = items.map((item) => cosine(item.embedding, queryVector));
   const fused = new Map<number, number>();
-  for (const ranking of [
-    top(items.map((item) => cosine(item.embedding, queryVector))),
-    top(bm25(items, query)),
-  ])
+  for (const ranking of [top(similarities), top(bm25(items, query))])
     ranking.forEach((index, rank) =>
       fused.set(index, (fused.get(index) ?? 0) + 1 / (RRF_K + rank + 1)),
     );
-  return [...fused]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, limit)
-    .map(([index]) => index);
+  return {
+    ranked: [...fused]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit)
+      .map(([index]) => index),
+    similarity: Math.max(0, ...similarities),
+  };
 }
 
 function top(scores: number[]): number[] {

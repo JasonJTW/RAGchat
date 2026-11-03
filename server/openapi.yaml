@@ -29,6 +29,11 @@ paths:
         After the text, each passage the answer marks with `[n]` arrives as a
         `data-citation` part in the same stream, with `data` shaped like
         Citation. Passages the answer doesn't mark are not sent.
+        When no stored chunk is similar enough to the question (best cosine
+        similarity below 0.3), or the passages don't answer it, the answer is
+        the fixed refusal 「這個問題我無法回答，請來信客服
+        support@megaweaving.example。」 with no citations; below the
+        similarity threshold the model is not called.
       requestBody:
         required: true
         content:

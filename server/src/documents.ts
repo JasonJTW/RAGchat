@@ -82,20 +82,23 @@ export function listChunks(id: string): ChunkSummary[] | undefined {
     }));
 }
 
-/** The chunks that best match the question, best first. */
+/**
+ * The chunks that best match the question, best first, and the highest cosine
+ * similarity of any chunk to the question (0 when nothing is stored).
+ */
 export async function retrieve(
   question: string,
   limit: number,
-): Promise<Passage[]> {
+): Promise<{ passages: Passage[]; similarity: number }> {
   const chunks = documents.flatMap((doc) =>
     doc.chunks.map((chunk, i) => ({ doc, chunk, i })),
   );
-  if (chunks.length === 0) return [];
+  if (chunks.length === 0) return { passages: [], similarity: 0 };
   const { embedding } = await embedOne({
     model: EMBEDDING_MODEL,
     value: question,
   });
-  const ranked = hybridSearch(
+  const { ranked, similarity } = hybridSearch(
     chunks.map(({ chunk }) => ({
       text: chunk.embedText,
       embedding: chunk.embedding,
@@ -104,7 +107,7 @@ export async function retrieve(
     embedding,
     limit,
   );
-  return ranked.map((index) => {
+  const passages = ranked.map((index) => {
     const { doc, chunk, i } = chunks[index];
     return {
       id: `${doc.id}:${i}`,
@@ -112,6 +115,7 @@ export async function retrieve(
       text: chunk.content,
     };
   });
+  return { passages, similarity };
 }
 
 /**

@@ -142,6 +142,17 @@ test.describe("answer key @live", () => {
       ).toBe(true);
     });
 
+  test("Q12: 我的帳號被停權了，要怎麼申訴？ is refused", async ({ page }) => {
+    test.setTimeout(180_000);
+    const { answer, text } = await ask(page, "我的帳號被停權了，要怎麼申訴？");
+    test.info().annotations.push({ type: "answer", description: text });
+    await answer.screenshot({ path: test.info().outputPath("answer.png") });
+
+    expect(text).toContain("這個問題我無法回答");
+    expect(text).toContain("support@megaweaving.example");
+    await expect(answer.getByRole("list", { name: "出處" })).toHaveCount(0);
+  });
+
   test("C1: Q4's citation expands to the 移動微型空間計畫 table", async ({
     page,
   }) => {

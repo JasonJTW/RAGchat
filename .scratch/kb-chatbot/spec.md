@@ -60,7 +60,11 @@
   - PDF 用文字層逐頁抽字（`pdfjs` 系），以頁為單位切，太長再依段落切；chunk 記頁碼，用來顯示「第 N 頁」；跨頁的表格當兩個 chunk，不嘗試合併
   - txt：偵測到 `Q:`／`Q：` 開頭的就一組 Q/A 一個 chunk（容忍沒空行和全形冒號）；其他 txt 依空行切，沒空行的長段落依句號切成約 300 字一塊、重疊一句
 - 檢索方法（影響 Demo Script 5、7、8）：混合檢索 = embedding cosine top 20 ＋ 關鍵字 BM25（中文用字元 bigram 斷詞）top 20，用 RRF 合併後取前 6 段送進 LLM；追問時先用 LLM 把問題改寫成獨立問題再檢索
-- 拒答規則（影響 Demo Script 7、8）：system prompt 要求只依提供的段落作答、段落沒有就輸出固定拒答句；此外若混合檢索最高分低於門檻，直接拒答、不呼叫 LLM。門檻在 `/poc-build` 時用 answer key 校準
+- 拒答規則（影響 Demo Script 7、8）：system prompt 要求只依提供的段落作答、段落沒有就輸出固定拒答句「這個問題我無法回答，請來信客服 support@megaweaving.example。」；回答含「這個問題我無法回答」時不送出處。此外若混合檢索最高分低於門檻，直接拒答、不呼叫 LLM
+  - 「最高分」用問題與所有 chunk 的最高 embedding cosine：RRF 分數只反映名次，不管問題多無關，第 1 名的分數都一樣，不能當門檻
+  - 門檻 0.30（只對 `openai/text-embedding-3-small` 有效，換 `EMBEDDING_MODEL` 要重新校準）。校準方法：上傳 10 份 md ＋ `source/04-founder-hsiao-yu-chih.md`（代替還不能上傳的 PDF），用真的 embedding 算 answer key 每題的最高 cosine：可答題 Q1–Q11 落在 0.38（Q6）到 0.73（Q5）之間，Q12 是 0.22；取兩者中點 0.30，兩邊各留約 0.08
+  - 門檻只擋明顯無關的問題；分數過門檻但文件沒寫的（Q6-after-delete 0.38、「平台有手機 App 嗎」0.41、「推薦拉麵店」0.32）靠 LLM 拒答，實測三題都輸出拒答句、沒有出處
+  - 07 上傳 PDF、txt 後要重算一次 Q1、Q6、Q7、Q8、Q10 的分數，確認沒有掉到 0.30 以下
 - 來源互相矛盾時（例如社團人數 8,000+／11k／12,000+），回答給最新且有日期的數字，並說明其他說法與「未經 Group Insights 確認」
 - 出處由後端回傳實際送進 LLM 的段落中、被回答引用到的那幾段（LLM 以 `[1]`、`[2]` 標記），不是讓 LLM 自己寫檔名
 - 單一使用者在本機跑：`npm run dev` 起 web :3000 與 server :4000，不部署

@@ -19,14 +19,17 @@ export const STUB_CHAT_REPLY = "這是假模型的回答，依據第 1 段。[1]
  * Replaces the AI Gateway with a fake provider, without a network call: any
  * embedding model id returns fixed vectors derived from the text and the id,
  * and any chat model id streams `chat.reply`. Returns the texts each embedding
- * model id was asked to embed, and the chat stub.
+ * model id was asked to embed, the chat stub, and `vectors`: fixed embeddings
+ * for given texts, overriding the derived ones.
  */
 export function installStubModels(): {
   embedded: Record<string, string[]>;
   chat: StubChat;
+  vectors: Map<string, number[]>;
 } {
   const embedded: Record<string, string[]> = {};
   const chat: StubChat = { reply: STUB_CHAT_REPLY, prompts: [] };
+  const vectors = new Map<string, number[]>();
   const provider = new MockProviderV4();
   provider.embeddingModel = (modelId: string) =>
     new MockEmbeddingModelV4({
@@ -35,7 +38,9 @@ export function installStubModels(): {
       doEmbed: ({ values }) => {
         (embedded[modelId] ??= []).push(...values);
         return Promise.resolve({
-          embeddings: values.map((text) => stubVector(modelId, text)),
+          embeddings: values.map(
+            (text) => vectors.get(text) ?? stubVector(modelId, text),
+          ),
           warnings: [],
         });
       },
@@ -85,7 +90,7 @@ export function installStubModels(): {
       },
     });
   globalThis.AI_SDK_DEFAULT_PROVIDER = provider;
-  return { embedded, chat };
+  return { embedded, chat, vectors };
 }
 
 // Hashes character bigrams into 64 buckets, so texts sharing words point the

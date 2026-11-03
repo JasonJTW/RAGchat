@@ -105,6 +105,48 @@ describe("POST /api/chat", () => {
     expect(at).toBeLessThan(prompt.indexOf("[3]"));
   });
 
+  it("refuses without calling the model when no passage is similar enough", async () => {
+    const { chat, vectors } = installStubModels();
+    const question = "我的帳號被停權了，要怎麼申訴？";
+    // Points away from every stored passage: similarity below the threshold.
+    vectors.set(question, new Array<number>(64).fill(-1));
+    const app = await startServerWithUpload();
+
+    const parts = await ask(app, question);
+
+    const text = parts
+      .filter((p) => p.type === "text-delta")
+      .map((p) => p.delta)
+      .join("");
+    expect(text).toContain("這個問題我無法回答");
+    expect(text).toContain("support@megaweaving.example");
+    expect(parts.some((p) => p.type === "data-citation")).toBe(false);
+    expect(chat.prompts).toHaveLength(0);
+  });
+
+  it("cites nothing when the model refuses", async () => {
+    const { chat } = installStubModels();
+    chat.reply =
+      "這個問題我無法回答，請來信客服 support@megaweaving.example。[1]";
+    const app = await startServerWithUpload();
+
+    const parts = await ask(app, "旅梯計畫的贊助商是誰？");
+
+    expect(chat.prompts).toHaveLength(1);
+    expect(parts.some((p) => p.type === "data-citation")).toBe(false);
+  });
+
+  it("tells the model the refusal sentence for questions the passages don't answer", async () => {
+    const { chat } = installStubModels();
+    const app = await startServerWithUpload();
+
+    await ask(app, "旅梯計畫總共巡迴了幾站？");
+
+    expect(chat.prompts[0]).toContain(
+      "這個問題我無法回答，請來信客服 support@megaweaving.example。",
+    );
+  });
+
   it("gives the model the passages that match the question", async () => {
     const { chat } = installStubModels();
     const app = await startServerWithUpload();
