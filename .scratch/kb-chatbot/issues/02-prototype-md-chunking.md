@@ -4,8 +4,12 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] 報告列出 10 份 md 各自的 chunk 數，以及每個 chunk 的標題路徑與字數
-- [ ] 報告有一張表：Q2–Q5、Q9、Q11 × 三種變體，記正確段落在混合檢索的名次
-- [ ] 報告寫明選了哪種切法、理由，以及每個 chunk 的字數上下限；spec 的「切段策略」已依結論更新
+- [x] 報告列出 10 份 md 各自的 chunk 數，以及每個 chunk 的標題路徑與字數
+- [x] 報告有一張表：Q2–Q5、Q9、Q11 × 三種變體，記正確段落在混合檢索的名次
+- [x] 報告寫明選了哪種切法、理由，以及每個 chunk 的字數上下限；spec 的「切段策略」已依結論更新
+
+## 結論
+
+選 (e)：標題路徑前綴、每段 ≤ 800 tokens（cl100k，含前綴）、長表按整列切並重複表頭、不合併短小節、丟掉內文 < 30 tokens 的段。六題在 (a)(b)(c)(d)(e) 都進前 6；(b) 不加標題路徑讓 Q9 從第 1 掉到第 4，spec 原本的短節合併會讓出處標題路徑錯位。報告：[`md-chunking-report.md`](../md-chunking-report.md)。原型（`chunker.mjs`、`run.mjs`、可雙擊的 `prototype.html`）在分支 `prototype/02-md-chunking` 的 `.scratch/kb-chatbot/prototype-md-chunking/`。
