@@ -9,17 +9,27 @@ const MAX_TOKENS = 800; // per PDF chunk, page prefix included, as for markdown
 const SENTENCES_PER_CHUNK_CHARS = 300; // txt paragraphs without blank lines
 const OPENING_CHARS = 40; // a txt chunk's path
 
+const SUPPORTED = ["md", "pdf", "txt"];
+
+const extensionOf = (filename: string) =>
+  filename.toLowerCase().split(".").pop();
+
+/** Whether chunkDocument can read the file: markdown, PDF, or txt. */
+export function isSupported(filename: string): boolean {
+  return SUPPORTED.includes(extensionOf(filename) ?? "");
+}
+
 export async function chunkDocument(
   filename: string,
   bytes: Buffer,
   countTokens: (text: string) => number,
 ): Promise<Chunk[]> {
-  const extension = filename.toLowerCase().split(".").pop();
+  const extension = extensionOf(filename);
   if (extension === "md")
     return chunkMarkdown(filename, bytes.toString("utf8"), countTokens);
   if (extension === "txt") return chunkText(filename, bytes.toString("utf8"));
   if (extension === "pdf") return chunkPdf(filename, bytes, countTokens);
-  return [];
+  throw new Error(`unsupported format: ${filename}`); // check isSupported first
 }
 
 /**

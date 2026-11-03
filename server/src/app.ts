@@ -4,7 +4,13 @@ import multer from "multer";
 import { z } from "zod";
 import { login, requireAdmin } from "./auth.js";
 import { streamAnswer } from "./chat.js";
-import { addDocuments, listChunks, listDocuments } from "./documents.js";
+import { isSupported } from "./document-chunks.js";
+import {
+  addDocuments,
+  listChunks,
+  listDocuments,
+  removeDocument,
+} from "./documents.js";
 
 export const app = express();
 // Uploads are buffered in memory, so cap what one request can hold.
@@ -74,6 +80,15 @@ app.get("/api/documents/:id/chunks", (req, res) => {
   res.json(chunks);
 });
 
+// Responds once the removal is saved; the chatbot stops citing it at once.
+app.delete("/api/documents/:id", (req, res) => {
+  if (!removeDocument(req.params.id)) {
+    res.status(404).json({ error: "document not found" });
+    return;
+  }
+  res.status(204).end();
+});
+
 // Responds only once every file is chunked, embedded, and saved. A failure
 // stores none of the files, so a retry can't duplicate them.
 app.post("/api/documents", upload.array("files"), async (req, res) => {
@@ -82,6 +97,13 @@ app.post("/api/documents", upload.array("files"), async (req, res) => {
     filename: Buffer.from(file.originalname, "latin1").toString("utf8"),
     bytes: file.buffer,
   }));
+  const unsupported = files.filter((file) => !isSupported(file.filename));
+  if (unsupported.length) {
+    res.status(415).json({
+      error: `Unsupported format (only .md, .pdf, .txt): ${unsupported.map((f) => f.filename).join(", ")}`,
+    });
+    return;
+  }
   try {
     res.status(201).json(await addDocuments(files));
   } catch (error) {

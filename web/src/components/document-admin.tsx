@@ -21,13 +21,33 @@ interface ChunkSummary {
 /** The admin session is missing or expired (the server restarted). */
 class Unauthorized extends Error {}
 
+/** Any other failed request, with its HTTP status. */
+class RequestFailed extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
 async function adminFetch(url: string, init?: RequestInit) {
   const res = await fetch(url, init);
   if (res.status === 401) throw new Unauthorized();
   if (!res.ok)
-    throw new Error(`${init?.method ?? "GET"} ${url}: ${res.status}`);
+    throw new RequestFailed(
+      `${init?.method ?? "GET"} ${url}: ${res.status}`,
+      res.status,
+    );
   return res;
 }
+
+// What the admin sees when the server refuses an upload, by status.
+const UPLOAD_ERRORS: Record<number, string> = {
+  400: "一次最多上傳 10 份",
+  413: "單一檔案最大 5 MB",
+  415: "不支援的檔案格式",
+};
 
 const fetchJson = (url: string) => adminFetch(url).then((res) => res.json());
 
@@ -67,9 +87,24 @@ export function DocumentAdmin() {
       await mutate();
     } catch (e) {
       if (e instanceof Unauthorized) router.replace("/admin/login");
-      else setError("上傳失敗，請再試一次");
+      else
+        setError(
+          (e instanceof RequestFailed && UPLOAD_ERRORS[e.status]) ||
+            "上傳失敗，請再試一次",
+        );
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function remove(id: string) {
+    setError(null);
+    try {
+      await adminFetch(`/api/documents/${id}`, { method: "DELETE" });
+      await mutate();
+    } catch (e) {
+      if (e instanceof Unauthorized) router.replace("/admin/login");
+      else setError("刪除失敗，請再試一次");
     }
   }
 
@@ -123,6 +158,7 @@ export function DocumentAdmin() {
         <thead>
           <tr>
             <th>檔名</th>
+            <th>類型</th>
             <th>段落數</th>
             <th>上傳時間</th>
             <th />
@@ -133,6 +169,7 @@ export function DocumentAdmin() {
             <Fragment key={doc.id}>
               <tr>
                 <td>{doc.filename}</td>
+                <td>{documentType(doc.filename)}</td>
                 <td>
                   {doc.chunkCount}
                   {doc.chunkCount === 0 && (
@@ -151,11 +188,19 @@ export function DocumentAdmin() {
                   >
                     查看段落
                   </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-2"
+                    onClick={() => remove(doc.id)}
+                  >
+                    刪除
+                  </Button>
                 </td>
               </tr>
               {expanded === doc.id && (
                 <tr>
-                  <td colSpan={4}>
+                  <td colSpan={5}>
                     <ChunkList document={doc} />
                   </td>
                 </tr>
@@ -166,6 +211,17 @@ export function DocumentAdmin() {
       </table>
     </div>
   );
+}
+
+const TYPES: Record<string, string> = {
+  md: "Markdown",
+  pdf: "PDF",
+  txt: "純文字",
+};
+
+function documentType(filename: string): string {
+  const extension = filename.toLowerCase().split(".").pop() ?? "";
+  return TYPES[extension] ?? extension;
 }
 
 /** Read-only view of a document's chunks: heading path and first 80 characters. */

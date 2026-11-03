@@ -4,10 +4,10 @@
 
 **Blocked by:** 04, 08
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] 分兩批上傳 `fixtures/upload/` 下 13 份支援檔（先 10 份 `.md`，再 PDF 與 2 份 txt），列表 13 筆，每筆有檔名、類型、段落數、上傳時間
-- [ ] 一次選 11 份以上，畫面提示「一次最多上傳 10 份」，列表筆數不變
-- [ ] 上傳 `fixtures/upload/not-supported.docx`，顯示「不支援的檔案格式」，列表仍 13 筆
-- [ ] 刪除 `05-projects-and-practice.md` 後列表 12 筆；新對話問 Q4，回答的出處不含 05
-- [ ] 重啟 server 後，被刪的文件沒有回來
+- [x] 分兩批上傳 `fixtures/upload/` 下 13 份支援檔（先 10 份 `.md`，再 PDF 與 2 份 txt），列表 13 筆，每筆有檔名、類型、段落數、上傳時間
+- [x] 一次選 11 份以上，畫面提示「一次最多上傳 10 份」，列表筆數不變
+- [x] 上傳 `fixtures/upload/not-supported.docx`，顯示「不支援的檔案格式」，列表仍 13 筆
+- [x] 刪除 `05-projects-and-practice.md` 後列表 12 筆；新對話問 Q4，回答的出處不含 05
+- [x] 重啟 server 後，被刪的文件沒有回來

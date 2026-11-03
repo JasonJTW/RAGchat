@@ -148,6 +148,23 @@ export async function addDocuments(
   return listDocuments().filter((summary) => ids.has(summary.id));
 }
 
+/**
+ * Removes the document with its chunks and embeddings, saved before it
+ * resolves. False when no document has that id.
+ */
+export function removeDocument(id: string): boolean {
+  const index = documents.findIndex((doc) => doc.id === id);
+  if (index < 0) return false;
+  const [removed] = documents.splice(index, 1);
+  try {
+    save();
+  } catch (error) {
+    documents.splice(index, 0, removed); // still stored on disk, so keep it
+    throw error;
+  }
+  return true;
+}
+
 async function embed(chunks: Chunk[]): Promise<StoredChunk[]> {
   if (chunks.length === 0) return [];
   const { embeddings } = await embedMany({

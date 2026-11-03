@@ -150,8 +150,8 @@ paths:
       description: >
         Responds once every file is chunked, embedded, and saved. Markdown is
         split by heading, PDF by page (a PDF without a text layer gets 0
-        chunks), txt by Q/A pair or paragraph; other formats get 0 chunks for
-        now. All or nothing:
+        chunks), txt by Q/A pair or paragraph; any other format refuses the
+        whole request (415). All or nothing:
         if embedding or saving fails, none of the files are added.
       requestBody:
         required: true
@@ -186,6 +186,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "415":
+          description: A file is not .md, .pdf, or .txt; none of the files were added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "500":
           description: Embedding or saving failed; none of the files were added
           content:
@@ -194,6 +200,32 @@ paths:
                 $ref: "#/components/schemas/Error"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /api/documents/{id}:
+    delete:
+      operationId: deleteDocument
+      summary: Delete a document with its chunks and embeddings
+      description: >
+        Responds once the removal is saved; answers stop citing the document
+        immediately, and it stays deleted across a restart.
+      security:
+        - adminSession: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No document has that id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/documents/{id}/chunks:
     get:
       operationId: listDocumentChunks
