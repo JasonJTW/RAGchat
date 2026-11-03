@@ -3,7 +3,7 @@ import cors from "cors";
 import multer from "multer";
 import { login, requireAdmin } from "./auth.js";
 import { streamAnswer } from "./chat.js";
-import { addDocument, listDocuments } from "./documents.js";
+import { addDocument, listChunks, listDocuments } from "./documents.js";
 
 export const app = express();
 // Uploads are buffered in memory, so cap what one request can hold.
@@ -33,12 +33,24 @@ app.get("/api/documents", (_req, res) => {
   res.json(listDocuments());
 });
 
-app.post("/api/documents", upload.array("files"), (req, res) => {
+app.get("/api/documents/:id/chunks", (req, res) => {
+  const chunks = listChunks(req.params.id);
+  if (!chunks) {
+    res.status(404).json({ error: "document not found" });
+    return;
+  }
+  res.json(chunks);
+});
+
+// Responds only once every file is chunked, embedded, and saved.
+app.post("/api/documents", upload.array("files"), async (req, res) => {
   const files = (req.files ?? []) as Express.Multer.File[];
-  // multer decodes multipart filenames as latin1; restore UTF-8 names.
-  const added = files.map((file) =>
-    addDocument(Buffer.from(file.originalname, "latin1").toString("utf8")),
-  );
+  const added = [];
+  for (const file of files) {
+    // multer decodes multipart filenames as latin1; restore UTF-8 names.
+    const filename = Buffer.from(file.originalname, "latin1").toString("utf8");
+    added.push(await addDocument(filename, file.buffer));
+  }
   res.status(201).json(added);
 });
 

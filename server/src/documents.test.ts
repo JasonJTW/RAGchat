@@ -1,8 +1,24 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { app, MAX_UPLOAD_FILES, MAX_UPLOAD_FILE_BYTES } from "./app.js";
+import { installStubModels } from "./stub-models.js";
 
-async function loggedInAdmin() {
+const FIXTURES = path.join(
+  import.meta.dirname,
+  "../../.scratch/kb-chatbot/fixtures/upload",
+);
+const fixture = (name: string) =>
+  [readFileSync(path.join(FIXTURES, name)), name] as const;
+
+/**
+ * Loads the app fresh, as a server restart does, with the given env, and
+ * returns an agent logged in as the admin.
+ */
+async function startServerAsAdmin(env: Record<string, string> = {}) {
+  for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
+  vi.resetModules();
+  const { app } = await import("./app.js");
   const admin = request.agent(app);
   await admin
     .post("/api/login")
@@ -19,7 +35,7 @@ describe("/api/documents", () => {
   });
 
   it("lists an uploaded document with its UTF-8 filename", async () => {
-    const admin = await loggedInAdmin();
+    const admin = await startServerAsAdmin();
 
     const upload = await admin
       .post("/api/documents")
@@ -29,12 +45,13 @@ describe("/api/documents", () => {
 
     const list = await admin.get("/api/documents");
     expect(list.body).toContainEqual(
-      expect.objectContaining({ filename: "大量交織.md", chunkCount: 0 }),
+      expect.objectContaining({ filename: "大量交織.md" }),
     );
   });
 
   it("rejects a file over the size limit with 413", async () => {
-    const admin = await loggedInAdmin();
+    const admin = await startServerAsAdmin();
+    const { MAX_UPLOAD_FILE_BYTES } = await import("./app.js");
 
     const res = await admin
       .post("/api/documents")
@@ -47,7 +64,8 @@ describe("/api/documents", () => {
   });
 
   it("rejects more files than the limit with 400", async () => {
-    const admin = await loggedInAdmin();
+    const admin = await startServerAsAdmin();
+    const { MAX_UPLOAD_FILES } = await import("./app.js");
 
     let req = admin.post("/api/documents");
     for (let i = 0; i <= MAX_UPLOAD_FILES; i++) {
@@ -56,5 +74,50 @@ describe("/api/documents", () => {
     const res = await req;
 
     expect(res.status).toBe(400);
+  });
+
+  it("keeps documents and chunks across a restart", async () => {
+    let admin = await startServerAsAdmin();
+    const upload = await admin
+      .post("/api/documents")
+      .attach("files", ...fixture("05-projects-and-practice.md"));
+    const [doc] = upload.body as { id: string; chunkCount: number }[];
+    expect(doc.chunkCount).toBe(13);
+
+    admin = await startServerAsAdmin();
+
+    const list = await admin.get("/api/documents");
+    expect(list.body).toContainEqual(
+      expect.objectContaining({ id: doc.id, chunkCount: 13 }),
+    );
+    const chunks = await admin.get(`/api/documents/${doc.id}/chunks`);
+    expect(chunks.body).toHaveLength(13);
+  });
+
+  it("re-embeds every chunk when EMBEDDING_MODEL changes", async () => {
+    let admin = await startServerAsAdmin({ EMBEDDING_MODEL: "test/model-a" });
+    const upload = await admin
+      .post("/api/documents")
+      .attach("files", ...fixture("05-projects-and-practice.md"));
+    const [doc] = upload.body as { id: string }[];
+
+    const embedded = installStubModels();
+    admin = await startServerAsAdmin({ EMBEDDING_MODEL: "test/model-b" });
+
+    const list = await admin.get("/api/documents");
+    const total = (list.body as { chunkCount: number }[]).reduce(
+      (sum, d) => sum + d.chunkCount,
+      0,
+    );
+    expect(embedded["test/model-b"]).toHaveLength(total);
+    const chunks = await admin.get(`/api/documents/${doc.id}/chunks`);
+    for (const chunk of chunks.body as { embeddingModel: string }[])
+      expect(chunk.embeddingModel).toBe("test/model-b");
+  });
+
+  it("returns 404 for the chunks of an unknown document", async () => {
+    const admin = await startServerAsAdmin();
+    const res = await admin.get("/api/documents/nope/chunks");
+    expect(res.status).toBe(404);
   });
 });

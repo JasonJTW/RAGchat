@@ -41,7 +41,7 @@ test("walking skeleton: chat streams an answer, admin lists an upload", async ({
   const distinct = new Set(lengths.filter((n) => n > 0));
   expect(distinct.size).toBeGreaterThan(5);
 
-  // Step 2: after logging in, uploading 01-overview.md adds a row with 0 chunks.
+  // Step 2: after logging in, uploading 01-overview.md adds a row with its 6 chunks.
   await logIn(page);
   const row = page.getByRole("row", { name: /01-overview\.md/ });
   await expect(page.getByRole("table")).toHaveAttribute("aria-busy", "false");
@@ -53,6 +53,6 @@ test("walking skeleton: chat streams an answer, admin lists an upload", async ({
 
   await expect(row).toHaveCount(before + 1);
   await expect(
-    row.last().getByRole("cell", { name: "0", exact: true }),
+    row.last().getByRole("cell", { name: "6", exact: true }),
   ).toBeVisible();
 });
