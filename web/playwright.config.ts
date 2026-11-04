@@ -34,12 +34,12 @@ export default defineConfig({
         ADMIN_PASSWORD,
         // A fresh, empty document store per run, never the dev server/data/.
         DATA_DIR: mkdtempSync(path.join(tmpdir(), "kb-e2e-")),
-        // The full suite must not reach a real model: blank the key and use
-        // fake embeddings unless running live tests. (Shell env wins over the
+        // The full suite must not reach a real model: blank the keys and use
+        // fake models unless running live tests. (Shell env wins over the
         // root .env file.)
         ...(process.env.LIVE
           ? {}
-          : { AI_GATEWAY_API_KEY: "", STUB_MODELS: "1" }),
+          : { AI_GATEWAY_API_KEY: "", JEV_API_KEY: "", STUB_MODELS: "1" }),
       },
       url: `http://localhost:${SERVER_PORT}/health`,
       reuseExistingServer: false,

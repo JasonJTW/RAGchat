@@ -23,7 +23,7 @@ const ASK_WHICH_SUBJECT_AT = 0.5;
 
 **Blocked by:** 11
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] 按「新對話」後直接問 Q3，畫面只顯示「請問你指的是哪個計畫或主題？」，沒有出處，不含 2008／2012
 - [ ] 「這個 megaweaving.net 平台要怎麼註冊？」等有說出名稱的第一題照常回答並列出處，第一個字在送出後 5 秒內出現

@@ -57,4 +57,4 @@ Single-context: one root `GLOSSARY.md` + `docs/adr/`. See `docs/agents/domain.md
 - Start: `npm run dev` (chat `localhost:3000/`, admin `localhost:3000/admin`; Next rewrites `/api/*` to the server on :4000).
 - Full suite: `npm run lint && npm run typecheck && npm test && npm run test:e2e` (no LLM calls; `@live` tests excluded). E2E starts its own web :3100 + server :4100, never touching a running `npm run dev`.
 - Live tests: `npm run test:live` (Playwright `@live` tests against the real LLM; needs `AI_GATEWAY_API_KEY`).
-- Env (root `.env`, see `.env.example`): `AI_GATEWAY_API_KEY`, `CHAT_MODEL` (e.g. `openai/gpt-5-mini`), `EMBEDDING_MODEL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`; server reads `DATA_DIR` (default `server/data/`); web reads `SERVER_URL` (default `http://localhost:4000`).
+- Env (root `.env`, see `.env.example`): `AI_GATEWAY_API_KEY`, `JEV_API_KEY` (Jev subject check; optional, live tests need it), `CHAT_MODEL` (e.g. `openai/gpt-5-mini`), `EMBEDDING_MODEL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`; server reads `DATA_DIR` (default `server/data/`); web reads `SERVER_URL` (default `http://localhost:4000`).

@@ -6,8 +6,9 @@ import {
   streamText,
   type UIMessageChunk,
 } from "ai";
+import { noul } from "@typesafe-ai/sdk";
 import { retrieve, type Passage } from "./documents.js";
-import { CHAT_MODEL, CHAT_PROVIDER_OPTIONS } from "./models.js";
+import { CHAT_MODEL, CHAT_PROVIDER_OPTIONS, SYSTEM_ONE } from "./models.js";
 
 /** A passage an answer cites, as shown under the answer. */
 export interface Citation extends Passage {
@@ -51,17 +52,23 @@ const REWRITE_PROMPT = `把使用者的最新問題改寫成一句不需要上�
 - 一律用繁體中文。
 - 最新問題本身已經完整時，原樣輸出。`;
 
-const SUBJECT_CHECK_PROMPT = `判斷使用者的問題有沒有說出它要問的對象的名稱（計畫、平台、社團、人物、活動等的名字）。
-- 問題只用「它」「那」「這」「其」等字指一個沒說出名字的對象：沒有。
-- 「這個」「那個」後面接著名稱，或名稱出現在問題其他地方：有。
-例子：
-「這個 megaweaving.net 平台要怎麼註冊？」→ 有
-「那個旅梯計畫的起點在哪裡？」→ 有
-「大量交織這個 FB 社團是誰創的？」→ 有
-「它是什麼時候開始的？」→ 沒有
-「其中哪一個最受歡迎？」→ 沒有
-「那這個要怎麼申請？」→ 沒有
-只輸出「有」或「沒有」，不要解釋。`;
+// Asked of Jev about a first question. Validated in ticket 11 on the answer
+// key's first questions; the examples must stay clear of answer-key questions.
+const FIRST_QUESTION_CONTEXT =
+  "大量交織 megaweaving 客服聊天機器人收到的第一則訊息，之前沒有任何對話。機器人回答關於大量交織（理念、FB 社團、megaweaving.net 平台、交換規則、發起人蕭有志、各項計畫）的問題。";
+const UNNAMED_SUBJECT = noul(
+  "這個問題問的是某個特定對象（計畫、活動、案例、物品等），但沒說出它的名稱，只用代名詞（它、那、這、其）指它，或直接省略主詞，所以不知道上文就無法知道在問什麼。",
+  {
+    true: "問題指向一個沒說出名稱的特定對象，例如「它的報名截止日是哪天？」「一共有幾個人參加？」",
+    false:
+      "問題說出了要問的對象名稱，或問的是大量交織、megaweaving.net 平台、社團、交換規則本身的一般使用問題（例如「怎麼刪除自己的貼文？」「社團可以賣東西嗎？」），即使用了「這個」「那個」，後面也接著名稱",
+  },
+);
+// From ticket 11: first questions that name their subject scored at most
+// 0.28, ones that don't at least 0.69 (one miss at 0.41).
+const ASK_WHICH_SUBJECT_AT = 0.5;
+// Jev answers in ~0.2 s warm, ~0.4 s cold; past this the chat answers as usual.
+const JEV_DEADLINE_MS = 1_500;
 
 // A first question with one of these may point at something it never names.
 const POINTING_WORD = /[它那這其]/;
@@ -72,9 +79,8 @@ const CLARIFY = "請問你指的是哪個計畫或主題？";
  * Answers the latest user message from the stored documents, streamed. A
  * follow-up is first rewritten into a standalone question for retrieval; the
  * answer still sees the whole conversation. A first question with a pointing
- * word (它／那／這／其) is checked for naming its subject while the answer is
- * prepared; the answer is held back until the check passes, and replaced by
- * a request to name the subject when it fails.
+ * word (它／那／這／其) is first checked by Jev for naming its subject; when
+ * it doesn't, the reply asks which subject is meant instead of answering.
  */
 export function streamAnswer(res: Response, messages: ChatMessage[]) {
   const turns = textTurns(messages);
@@ -84,31 +90,19 @@ export function streamAnswer(res: Response, messages: ChatMessage[]) {
       const abort = new AbortController();
       // A client that leaves stops the answer too (after a full answer, a no-op).
       res.once("close", () => abort.abort());
-      let parts: AsyncIterable<UIMessageChunk> | UIMessageChunk[] = answerParts(
-        turns,
-        question,
-        abort.signal,
-      );
-      if (!turns.length && POINTING_WORD.test(question)) {
-        parts = startedEarly(parts);
-        let named = false;
-        try {
-          named = await namesItsSubject(question);
-        } finally {
-          // The held answer runs on its own: stop it on every path that
-          // won't read it, a failed check included.
-          if (!named) abort.abort();
-        }
-        if (!named) {
-          parts = [
-            { type: "text-delta", id: "answer", delta: CLARIFY },
-            { type: "text-end", id: "answer" },
-          ];
-        }
-      }
+      const clarify =
+        !turns.length &&
+        POINTING_WORD.test(question) &&
+        (await leavesSubjectUnnamed(question));
       writer.write({ type: "start" });
       writer.write({ type: "text-start", id: "answer" });
-      for await (const part of parts) writer.write(part);
+      if (clarify) {
+        writer.write({ type: "text-delta", id: "answer", delta: CLARIFY });
+        writer.write({ type: "text-end", id: "answer" });
+      } else {
+        for await (const part of answerParts(turns, question, abort.signal))
+          writer.write(part);
+      }
       writer.write({ type: "finish" });
     },
     onError: (error) => {
@@ -168,47 +162,23 @@ async function* answerParts(
       yield { type: "data-citation", id: citation.id, data: citation };
 }
 
-async function namesItsSubject(question: string): Promise<boolean> {
-  const { text } = await generateText({
-    model: CHAT_MODEL,
-    system: SUBJECT_CHECK_PROMPT,
-    providerOptions: CHAT_PROVIDER_OPTIONS,
-    prompt: `問題：${question}`,
-  });
-  return !text.includes("沒有");
-}
-
-// Starts pulling `source` now, holding what arrives until it is iterated.
-// A failure surfaces only if it is iterated.
-function startedEarly<T>(source: AsyncIterable<T>): AsyncIterable<T> {
-  const held: T[] = [];
-  let finished = false;
-  let failure: Error | undefined;
-  let wake = () => {};
-  void (async () => {
-    try {
-      for await (const item of source) {
-        held.push(item);
-        wake();
-      }
-    } catch (error) {
-      failure = error instanceof Error ? error : new Error(String(error));
-    } finally {
-      finished = true;
-      wake();
-    }
-  })();
-  return {
-    async *[Symbol.asyncIterator]() {
-      for (let i = 0; ; i++) {
-        while (i >= held.length && !finished)
-          await new Promise<void>((resolve) => (wake = resolve));
-        if (i < held.length) yield held[i];
-        else if (failure) throw failure;
-        else return;
-      }
-    },
-  };
+// Whether Jev finds the question points at something it never names. No
+// JEV_API_KEY, a failure or no answer within the deadline counts as named.
+async function leavesSubjectUnnamed(question: string): Promise<boolean> {
+  if (!SYSTEM_ONE) return false;
+  try {
+    const { answers } = await SYSTEM_ONE.systemOne(
+      {
+        state: { context: FIRST_QUESTION_CONTEXT, question },
+        questions: { unnamedSubject: UNNAMED_SUBJECT },
+      },
+      { signal: AbortSignal.timeout(JEV_DEADLINE_MS) },
+    );
+    return answers.unnamedSubject.noul >= ASK_WHICH_SUBJECT_AT;
+  } catch (error) {
+    console.warn("subject check failed, answering as usual:", error);
+    return false;
+  }
 }
 
 interface Turn {

@@ -4,6 +4,7 @@ import {
   MockProviderV4,
 } from "ai/test";
 import { simulateReadableStream } from "ai";
+import type { SystemOne } from "./models.js";
 
 /** The fake chat model's next reply and the prompts it was sent. */
 export interface StubChat {
@@ -15,30 +16,35 @@ export interface StubChat {
   rewrite: string;
   /** Each rewrite prompt, flattened like `prompts`. */
   rewritePrompts: string[];
-  /** Returned whole when a first question is checked for naming its subject. */
-  verdict: string;
-  /** Each check prompt, flattened like `prompts`. */
-  verdictPrompts: string[];
-  /** When set, the subject check fails with this error instead. */
-  verdictError?: Error;
-  /** The abort signal of each streamed answer, in call order. */
-  streamSignals: AbortSignal[];
+}
+
+/** The fake Jev's answer to every Noul and the state of each request. */
+export interface StubJev {
+  /** The probability every Noul question is answered with. */
+  noul: number;
+  /** Each request's state, in call order. */
+  states: unknown[];
+  /** When set, every request fails with this error. */
+  error?: Error;
+  /** When set, a request never answers; it fails once its signal aborts. */
+  hangs?: boolean;
 }
 
 export const STUB_CHAT_REPLY = "這是假模型的回答，依據第 1 段。[1]";
 export const STUB_CHAT_REWRITE = "旅梯計畫總共巡迴了幾站？是哪幾年？";
 
 /**
- * Replaces the AI Gateway with a fake provider, without a network call: any
+ * Replaces the AI Gateway and Jev with fakes, without a network call: any
  * embedding model id returns fixed vectors derived from the text and the id,
- * and any chat model id streams `chat.reply`, returns `chat.verdict` when asked
- * whether a question names its subject, and `chat.rewrite` otherwise. Returns the texts each embedding
- * model id was asked to embed, the chat stub, and `vectors`: fixed embeddings
- * for given texts, overriding the derived ones.
+ * any chat model id streams `chat.reply` and returns `chat.rewrite` whole, and
+ * Jev answers every Noul with `jev.noul`. Returns the texts each embedding
+ * model id was asked to embed, the chat and Jev stubs, and `vectors`: fixed
+ * embeddings for given texts, overriding the derived ones.
  */
 export function installStubModels(): {
   embedded: Record<string, string[]>;
   chat: StubChat;
+  jev: StubJev;
   vectors: Map<string, number[]>;
 } {
   const embedded: Record<string, string[]> = {};
@@ -47,9 +53,6 @@ export function installStubModels(): {
     prompts: [],
     rewrite: STUB_CHAT_REWRITE,
     rewritePrompts: [],
-    verdict: "有",
-    verdictPrompts: [],
-    streamSignals: [],
   };
   const vectors = new Map<string, number[]>();
   const provider = new MockProviderV4();
@@ -71,16 +74,12 @@ export function installStubModels(): {
     new MockLanguageModelV4({
       modelId,
       doGenerate: ({ prompt }) => {
-        const text = flatten(prompt);
-        const isCheck = text.includes(SUBJECT_CHECK_INSTRUCTION);
-        (isCheck ? chat.verdictPrompts : chat.rewritePrompts).push(text);
-        if (isCheck && chat.verdictError)
-          return Promise.reject(chat.verdictError);
+        chat.rewritePrompts.push(flatten(prompt));
         return Promise.resolve({
           content: [
             {
               type: "text" as const,
-              text: isCheck ? chat.verdict : chat.rewrite,
+              text: chat.rewrite,
             },
           ],
           finishReason: { unified: "stop" as const, raw: undefined },
@@ -88,9 +87,8 @@ export function installStubModels(): {
           warnings: [],
         });
       },
-      doStream: ({ prompt, abortSignal }) => {
+      doStream: ({ prompt }) => {
         chat.prompts.push(flatten(prompt));
-        chat.streamSignals.push(abortSignal ?? new AbortController().signal);
         return Promise.resolve({
           stream: simulateReadableStream({
             chunkDelayInMs: 10,
@@ -113,13 +111,35 @@ export function installStubModels(): {
       },
     });
   globalThis.AI_SDK_DEFAULT_PROVIDER = provider;
-  return { embedded, chat, vectors };
+  const jev: StubJev = { noul: 0, states: [] };
+  const fakeJev = {
+    systemOne(
+      request: { state: unknown; questions: Record<string, unknown> },
+      options?: { signal?: AbortSignal },
+    ) {
+      jev.states.push(request.state);
+      if (jev.error) return Promise.reject(jev.error);
+      if (jev.hangs)
+        return new Promise((_, reject) =>
+          options?.signal?.addEventListener("abort", () =>
+            reject(new Error("aborted")),
+          ),
+        );
+      return Promise.resolve({
+        model: "jev-stub",
+        answers: Object.fromEntries(
+          Object.keys(request.questions).map((id) => [
+            id,
+            { type: "noul", noul: jev.noul },
+          ]),
+        ),
+        usage: { input_tokens: 0, output_tokens: 0 },
+      });
+    },
+  };
+  globalThis.SYSTEM_ONE_CLIENT = fakeJev as unknown as SystemOne;
+  return { embedded, chat, jev, vectors };
 }
-
-// The instruction chat.ts's subject check ends its system prompt with. Not
-// imported: loading chat.ts loads the document store, which must not happen
-// before the stub is installed.
-const SUBJECT_CHECK_INSTRUCTION = "只輸出「有」或「沒有」";
 
 const NO_USAGE = {
   inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
