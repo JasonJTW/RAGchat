@@ -19,6 +19,7 @@
 - If auto-merge stalls on a failing check, fix the failure and push. Never merge manually past a red check.
 - A behaviour change ships with a test.
 - `server/openapi.yaml` is the API contract. Update it in the same change as any route.
+- Every worktree, including a scratch one, gets its own `node_modules`: work in the existing worktree with `git switch`, or run `npm ci` in the new one. A symlinked `node_modules` resolves workspace packages to the other checkout and breaks both when either reinstalls.
 
 ## Design: deep modules
 
