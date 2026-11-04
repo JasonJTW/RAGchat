@@ -82,6 +82,8 @@ export function streamAnswer(res: Response, messages: ChatMessage[]) {
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
       const abort = new AbortController();
+      // A client that leaves stops the answer too (after a full answer, a no-op).
+      res.once("close", () => abort.abort());
       let parts: AsyncIterable<UIMessageChunk> | UIMessageChunk[] = answerParts(
         turns,
         question,
@@ -89,8 +91,15 @@ export function streamAnswer(res: Response, messages: ChatMessage[]) {
       );
       if (!turns.length && POINTING_WORD.test(question)) {
         parts = startedEarly(parts);
-        if (!(await namesItsSubject(question))) {
-          abort.abort();
+        let named = false;
+        try {
+          named = await namesItsSubject(question);
+        } finally {
+          // The held answer runs on its own: stop it on every path that
+          // won't read it, a failed check included.
+          if (!named) abort.abort();
+        }
+        if (!named) {
           parts = [
             { type: "text-delta", id: "answer", delta: CLARIFY },
             { type: "text-end", id: "answer" },
@@ -126,6 +135,7 @@ async function* answerParts(
     ? await standaloneQuestion(turns, question)
     : question;
   const { passages, similarity } = await retrieve(query, PASSAGES_PER_ANSWER);
+  if (abortSignal.aborted) return;
   if (similarity < MIN_SIMILARITY) {
     yield { type: "text-delta", id: "answer", delta: REFUSAL };
     yield { type: "text-end", id: "answer" };

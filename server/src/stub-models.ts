@@ -19,6 +19,10 @@ export interface StubChat {
   verdict: string;
   /** Each check prompt, flattened like `prompts`. */
   verdictPrompts: string[];
+  /** When set, the subject check fails with this error instead. */
+  verdictError?: Error;
+  /** The abort signal of each streamed answer, in call order. */
+  streamSignals: AbortSignal[];
 }
 
 export const STUB_CHAT_REPLY = "這是假模型的回答，依據第 1 段。[1]";
@@ -45,6 +49,7 @@ export function installStubModels(): {
     rewritePrompts: [],
     verdict: "有",
     verdictPrompts: [],
+    streamSignals: [],
   };
   const vectors = new Map<string, number[]>();
   const provider = new MockProviderV4();
@@ -69,6 +74,8 @@ export function installStubModels(): {
         const text = flatten(prompt);
         const isCheck = text.includes(SUBJECT_CHECK_INSTRUCTION);
         (isCheck ? chat.verdictPrompts : chat.rewritePrompts).push(text);
+        if (isCheck && chat.verdictError)
+          return Promise.reject(chat.verdictError);
         return Promise.resolve({
           content: [
             {
@@ -81,8 +88,9 @@ export function installStubModels(): {
           warnings: [],
         });
       },
-      doStream: ({ prompt }) => {
+      doStream: ({ prompt, abortSignal }) => {
         chat.prompts.push(flatten(prompt));
+        chat.streamSignals.push(abortSignal ?? new AbortController().signal);
         return Promise.resolve({
           stream: simulateReadableStream({
             chunkDelayInMs: 10,
