@@ -50,6 +50,15 @@
   - 金鑰：只要根目錄 `.env` 的 `AI_GATEWAY_API_KEY`；換成 `anthropic/…`、`google/…` 等模型只改環境變數字串，不用裝套件、不用各家金鑰
   - 模型字串只在 server 啟動時從環境變數讀一次，集中在一個模組；聊天、改寫、embedding 都從那裡拿
   - 每個 chunk 記下產生它的 embedding 模型 id；server 啟動時如果發現 `EMBEDDING_MODEL` 換了，就自動把所有文件重新 embedding（不同模型的向量維度不同，不能混著比）
+- 第一題要不要先反問（影響 Demo Script 5、8；取代 06b 用 `CHAT_MODEL` 判斷的做法）：
+  - 「問題有沒有說出要問的對象的名稱」改由 Jev（TypeSafe System One）判斷，一律透過官方 JavaScript SDK `@typesafe-ai/sdk` 呼叫，不直接打 HTTP API，是 LLM 呼叫一律走 AI SDK 的唯一例外；金鑰是根目錄 `.env` 的 `JEV_API_KEY`
+  - 判斷跑完才開始檢索與回答，不再同時開跑、暫存回答
+  - 對話的每個第一題都判斷，不再只判斷含「它／那／這／其」的題目，所以省略主詞的第一題（例如「是哪幾年辦的？」）也會被反問
+  - Jev 回傳「沒說出名稱」的機率（Noul），≥ 0.5 才反問。11 原型校準：該照常回答的題目最高 0.28、該反問的最低 0.69；Jev 熱呼叫中位 215 ms、冷呼叫 313–436 ms
+  - 已知缺口：「每個人最多可以花多少錢？」這類省略主詞、但看起來像一般問題的第一題，Jev 只給 0.39–0.41，會照常回答不反問
+  - Jev 失敗、逾時（上限約 1.5 秒）或沒設 `JEV_API_KEY` 時照常回答，不反問
+  - 有上文的追問照舊不判斷，改寫成獨立問題仍用 `CHAT_MODEL`
+  - 單元與 server 測試用假的 Jev，不打網路；`@live` 測試要 `JEV_API_KEY`
 - 切段策略（影響 Demo Script 3、5、6；markdown 部分經 02 原型驗證，見 `md-chunking-report.md`）：
   - markdown 依標題階層（`#`/`##`/`###`）切，每段前面加上「檔名 › H1 › H2 › H3」的標題路徑一起 embedding，也一起進 BM25。原型實測拿掉標題路徑後 Q9 的正確段落從第 1 掉到第 4
   - 每段上限 800 tokens，用 `cl100k_base`（`js-tiktoken`）計，標題路徑前綴也算在內；原型實測 10 份 md 切成 78 段，每段 73–800 tokens（47–1,527 字）
