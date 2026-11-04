@@ -25,6 +25,15 @@ paths:
       description: >
         Answers the latest user message from the 6 passages that best match
         it (embedding cosine and BM25, merged by reciprocal rank fusion).
+        When earlier messages are sent, the latest one is first rewritten
+        into a standalone question for retrieval, and the answer sees the
+        whole conversation. The conversation lives only in the client.
+        When the latest message is the only one and contains 它, 那, 這 or
+        其, the chat model is asked whether it names its subject, while the
+        answer is prepared alongside and held back. If it does not, the
+        answer is dropped and the reply is the fixed sentence
+        「請問你指的是哪個計畫或主題？」 with no citations; otherwise the
+        held answer is streamed as usual.
         Streams the answer as an AI SDK UI message stream (Server-Sent Events).
         After the text, each passage the answer marks with `[n]` arrives as a
         `data-citation` part in the same stream, with `data` shaped like

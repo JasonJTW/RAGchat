@@ -7,23 +7,39 @@ import { expect, type Page } from "@playwright/test";
  */
 export async function ask(page: Page, question: string) {
   await page.goto("/");
-  await page.evaluate(() => {
-    const w = window as unknown as { answerLengths: number[] };
+  return askFollowUp(page, question);
+}
+
+/** Like `ask`, but in the conversation already on the page. */
+export async function askFollowUp(page: Page, question: string) {
+  const answers = page.getByRole("article", { name: "回答" });
+  const earlier = await answers.count();
+  await page.evaluate((index) => {
+    const w = window as unknown as {
+      answerIndex: number;
+      answerLengths: number[];
+      watching?: boolean;
+    };
+    w.answerIndex = index;
     w.answerLengths = [];
+    if (w.watching) return;
+    w.watching = true;
     new MutationObserver(() => {
-      const text = document.querySelector('article[aria-label="回答"] > p');
+      const text = document.querySelectorAll('article[aria-label="回答"] > p')[
+        w.answerIndex
+      ];
       if (text) w.answerLengths.push(text.textContent?.length ?? 0);
     }).observe(document.body, {
       subtree: true,
       childList: true,
       characterData: true,
     });
-  });
+  }, earlier);
   await page.getByRole("textbox", { name: "問題" }).fill(question);
   const sentAt = Date.now();
   await page.getByRole("button", { name: "送出" }).click();
 
-  const answer = page.getByRole("article", { name: "回答" });
+  const answer = answers.nth(earlier);
   const text = answer.locator(":scope > p");
   await expect(text).not.toBeEmpty({ timeout: 5_000 });
   const firstCharMs = Date.now() - sentAt;

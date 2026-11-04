@@ -8,14 +8,27 @@ import { Textarea } from "@/components/ui/textarea";
 import type { ChatMessage } from "@/lib/chat-message";
 
 export function Chat() {
-  const { messages, sendMessage, status } = useChat<ChatMessage>({
-    transport: new DefaultChatTransport({ api: "/api/chat" }),
-  });
+  const { messages, sendMessage, setMessages, status, stop } =
+    useChat<ChatMessage>({
+      transport: new DefaultChatTransport({ api: "/api/chat" }),
+    });
   const [input, setInput] = useState("");
   const busy = status === "submitted" || status === "streaming";
 
   return (
     <div className="flex flex-1 flex-col gap-4">
+      <Button
+        type="button"
+        variant="outline"
+        className="self-end"
+        onClick={() => {
+          void stop();
+          setMessages([]);
+          setInput("");
+        }}
+      >
+        新對話
+      </Button>
       <div className="flex flex-1 flex-col gap-3">
         {messages.map((message) =>
           message.role === "user" ? (
