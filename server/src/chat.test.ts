@@ -260,6 +260,20 @@ describe("POST /api/chat", () => {
       expect(parts.some((p) => p.type === "data-citation")).toBe(false);
     });
 
+    it("aborts the held answer when the check fails", async () => {
+      const { chat } = installStubModels();
+      chat.verdictError = new Error("gateway timeout");
+      const app = await startServerWithUpload();
+
+      const parts = await ask(app, Q3);
+
+      expect(parts.some((p) => p.type === "error")).toBe(true);
+      expect(textOf(parts)).not.toContain(chat.reply);
+      // Give the held answer time to reach the model if nothing stopped it.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(chat.streamSignals.every((signal) => signal.aborted)).toBe(true);
+    });
+
     it("is answered as usual, with citations, when the check finds a name", async () => {
       const { chat } = installStubModels();
       chat.verdict = "有";
