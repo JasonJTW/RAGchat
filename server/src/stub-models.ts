@@ -15,6 +15,10 @@ export interface StubChat {
   rewrite: string;
   /** Each rewrite prompt, flattened like `prompts`. */
   rewritePrompts: string[];
+  /** Returned whole when a first question is checked for naming its subject. */
+  verdict: string;
+  /** Each check prompt, flattened like `prompts`. */
+  verdictPrompts: string[];
 }
 
 export const STUB_CHAT_REPLY = "這是假模型的回答，依據第 1 段。[1]";
@@ -23,7 +27,8 @@ export const STUB_CHAT_REWRITE = "旅梯計畫總共巡迴了幾站？是哪幾�
 /**
  * Replaces the AI Gateway with a fake provider, without a network call: any
  * embedding model id returns fixed vectors derived from the text and the id,
- * and any chat model id streams `chat.reply`. Returns the texts each embedding
+ * and any chat model id streams `chat.reply`, returns `chat.verdict` when asked
+ * whether a question names its subject, and `chat.rewrite` otherwise. Returns the texts each embedding
  * model id was asked to embed, the chat stub, and `vectors`: fixed embeddings
  * for given texts, overriding the derived ones.
  */
@@ -38,6 +43,8 @@ export function installStubModels(): {
     prompts: [],
     rewrite: STUB_CHAT_REWRITE,
     rewritePrompts: [],
+    verdict: "有",
+    verdictPrompts: [],
   };
   const vectors = new Map<string, number[]>();
   const provider = new MockProviderV4();
@@ -59,9 +66,16 @@ export function installStubModels(): {
     new MockLanguageModelV4({
       modelId,
       doGenerate: ({ prompt }) => {
-        chat.rewritePrompts.push(flatten(prompt));
+        const text = flatten(prompt);
+        const isCheck = text.includes(SUBJECT_CHECK_INSTRUCTION);
+        (isCheck ? chat.verdictPrompts : chat.rewritePrompts).push(text);
         return Promise.resolve({
-          content: [{ type: "text" as const, text: chat.rewrite }],
+          content: [
+            {
+              type: "text" as const,
+              text: isCheck ? chat.verdict : chat.rewrite,
+            },
+          ],
           finishReason: { unified: "stop" as const, raw: undefined },
           usage: NO_USAGE,
           warnings: [],
@@ -93,6 +107,11 @@ export function installStubModels(): {
   globalThis.AI_SDK_DEFAULT_PROVIDER = provider;
   return { embedded, chat, vectors };
 }
+
+// The instruction chat.ts's subject check ends its system prompt with. Not
+// imported: loading chat.ts loads the document store, which must not happen
+// before the stub is installed.
+const SUBJECT_CHECK_INSTRUCTION = "只輸出「有」或「沒有」";
 
 const NO_USAGE = {
   inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },

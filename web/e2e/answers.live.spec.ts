@@ -222,6 +222,20 @@ test.describe("answer key @live", () => {
     await expectMatches(Q3, followUp.answer, followUp.text);
   });
 
+  test("Q3 after 新對話 asks which subject is meant", async ({ page }) => {
+    test.setTimeout(300_000);
+    await ask(page, ANSWER_KEY.find((e) => e.id === "Q2")!.question);
+    await page.getByRole("button", { name: "新對話" }).click();
+
+    const { answer, text } = await askFollowUp(page, Q3.question);
+    test.info().annotations.push({ type: "answer", description: text });
+    await answer.screenshot({ path: test.info().outputPath("answer.png") });
+
+    expect(text).toBe("請問你指的是哪個計畫或主題？");
+    await expect(answer.getByRole("list", { name: "出處" })).toHaveCount(0);
+    expect(text.includes("2008") && text.includes("2012")).toBe(false);
+  });
+
   test("C1: Q4's citation expands to the 移動微型空間計畫 table", async ({
     page,
   }) => {

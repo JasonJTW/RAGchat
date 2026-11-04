@@ -4,6 +4,7 @@ import {
   generateText,
   pipeUIMessageStreamToResponse,
   streamText,
+  type UIMessageChunk,
 } from "ai";
 import { retrieve, type Passage } from "./documents.js";
 import { CHAT_MODEL, CHAT_PROVIDER_OPTIONS } from "./models.js";
@@ -50,59 +51,55 @@ const REWRITE_PROMPT = `把使用者的最新問題改寫成一句不需要上�
 - 一律用繁體中文。
 - 最新問題本身已經完整時，原樣輸出。`;
 
+const SUBJECT_CHECK_PROMPT = `判斷使用者的問題有沒有說出它要問的對象的名稱（計畫、平台、社團、人物、活動等的名字）。
+- 問題只用「它」「那」「這」「其」等字指一個沒說出名字的對象：沒有。
+- 「這個」「那個」後面接著名稱，或名稱出現在問題其他地方：有。
+例子：
+「這個 megaweaving.net 平台要怎麼註冊？」→ 有
+「那個旅梯計畫的起點在哪裡？」→ 有
+「大量交織這個 FB 社團是誰創的？」→ 有
+「它是什麼時候開始的？」→ 沒有
+「其中哪一個最受歡迎？」→ 沒有
+「那這個要怎麼申請？」→ 沒有
+只輸出「有」或「沒有」，不要解釋。`;
+
+// A first question with one of these may point at something it never names.
+const POINTING_WORD = /[它那這其]/;
+
+const CLARIFY = "請問你指的是哪個計畫或主題？";
+
 /**
  * Answers the latest user message from the stored documents, streamed. A
  * follow-up is first rewritten into a standalone question for retrieval; the
- * answer still sees the whole conversation.
+ * answer still sees the whole conversation. A first question with a pointing
+ * word (它／那／這／其) is checked for naming its subject while the answer is
+ * prepared; the answer is held back until the check passes, and replaced by
+ * a request to name the subject when it fails.
  */
 export function streamAnswer(res: Response, messages: ChatMessage[]) {
   const turns = textTurns(messages);
   const question = turns.at(-1)?.role === "user" ? turns.pop()!.content : "";
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
-      const query = turns.length
-        ? await standaloneQuestion(turns, question)
-        : question;
-      const { passages, similarity } = await retrieve(
-        query,
-        PASSAGES_PER_ANSWER,
+      const abort = new AbortController();
+      let parts: AsyncIterable<UIMessageChunk> | UIMessageChunk[] = answerParts(
+        turns,
+        question,
+        abort.signal,
       );
+      if (!turns.length && POINTING_WORD.test(question)) {
+        parts = startedEarly(parts);
+        if (!(await namesItsSubject(question))) {
+          abort.abort();
+          parts = [
+            { type: "text-delta", id: "answer", delta: CLARIFY },
+            { type: "text-end", id: "answer" },
+          ];
+        }
+      }
       writer.write({ type: "start" });
       writer.write({ type: "text-start", id: "answer" });
-      if (similarity < MIN_SIMILARITY) {
-        writer.write({ type: "text-delta", id: "answer", delta: REFUSAL });
-        writer.write({ type: "text-end", id: "answer" });
-        writer.write({ type: "finish" });
-        return;
-      }
-      const result = streamText({
-        model: CHAT_MODEL,
-        system: SYSTEM_PROMPT,
-        providerOptions: CHAT_PROVIDER_OPTIONS,
-        messages: [
-          ...turns,
-          {
-            role: "user",
-            content: `段落：\n\n${passages
-              .map((p, i) => `[${i + 1}] ${p.label}\n${p.text}`)
-              .join("\n\n")}\n\n問題：${question}`,
-          },
-        ],
-      });
-      let answer = "";
-      for await (const delta of result.textStream) {
-        answer += delta;
-        writer.write({ type: "text-delta", id: "answer", delta });
-      }
-      writer.write({ type: "text-end", id: "answer" });
-      // A refusal cites nothing, even if the model marked a passage.
-      if (!answer.includes(REFUSAL_PHRASE))
-        for (const citation of cited(answer, passages))
-          writer.write({
-            type: "data-citation",
-            id: citation.id,
-            data: citation,
-          });
+      for await (const part of parts) writer.write(part);
       writer.write({ type: "finish" });
     },
     onError: (error) => {
@@ -117,6 +114,91 @@ export function streamAnswer(res: Response, messages: ChatMessage[]) {
     // it until the answer is complete.
     headers: { "Cache-Control": "no-cache, no-transform" },
   });
+}
+
+// The answer's text deltas, its text end, then its citations.
+async function* answerParts(
+  turns: Turn[],
+  question: string,
+  abortSignal: AbortSignal,
+): AsyncGenerator<UIMessageChunk> {
+  const query = turns.length
+    ? await standaloneQuestion(turns, question)
+    : question;
+  const { passages, similarity } = await retrieve(query, PASSAGES_PER_ANSWER);
+  if (similarity < MIN_SIMILARITY) {
+    yield { type: "text-delta", id: "answer", delta: REFUSAL };
+    yield { type: "text-end", id: "answer" };
+    return;
+  }
+  const result = streamText({
+    model: CHAT_MODEL,
+    system: SYSTEM_PROMPT,
+    providerOptions: CHAT_PROVIDER_OPTIONS,
+    abortSignal,
+    messages: [
+      ...turns,
+      {
+        role: "user",
+        content: `段落：\n\n${passages
+          .map((p, i) => `[${i + 1}] ${p.label}\n${p.text}`)
+          .join("\n\n")}\n\n問題：${question}`,
+      },
+    ],
+  });
+  let answer = "";
+  for await (const delta of result.textStream) {
+    answer += delta;
+    yield { type: "text-delta", id: "answer", delta };
+  }
+  yield { type: "text-end", id: "answer" };
+  // A refusal cites nothing, even if the model marked a passage.
+  if (!answer.includes(REFUSAL_PHRASE))
+    for (const citation of cited(answer, passages))
+      yield { type: "data-citation", id: citation.id, data: citation };
+}
+
+async function namesItsSubject(question: string): Promise<boolean> {
+  const { text } = await generateText({
+    model: CHAT_MODEL,
+    system: SUBJECT_CHECK_PROMPT,
+    providerOptions: CHAT_PROVIDER_OPTIONS,
+    prompt: `問題：${question}`,
+  });
+  return !text.includes("沒有");
+}
+
+// Starts pulling `source` now, holding what arrives until it is iterated.
+// A failure surfaces only if it is iterated.
+function startedEarly<T>(source: AsyncIterable<T>): AsyncIterable<T> {
+  const held: T[] = [];
+  let finished = false;
+  let failure: Error | undefined;
+  let wake = () => {};
+  void (async () => {
+    try {
+      for await (const item of source) {
+        held.push(item);
+        wake();
+      }
+    } catch (error) {
+      failure = error instanceof Error ? error : new Error(String(error));
+    } finally {
+      finished = true;
+      wake();
+    }
+  })();
+  return {
+    async *[Symbol.asyncIterator]() {
+      for (let i = 0; ; i++) {
+        while (i >= held.length && !finished)
+          await new Promise<void>((resolve) => (wake = resolve));
+        if (i < held.length) yield held[i];
+        else if (failure) throw failure;
+        else return;
+      }
+    },
+  };
 }
 
 interface Turn {

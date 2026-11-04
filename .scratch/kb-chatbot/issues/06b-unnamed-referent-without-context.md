@@ -6,12 +6,12 @@
 
 **Blocked by:** 06a
 
-**Status:** blocked
+**Status:** done
 
-- [ ] 按「新對話」後直接問 Q3（沒有上文），不會回答成大直計畫的年份
-- [ ] 同一批文件下，Q2、Q4、Q5、Q9、Q11 第一題照常回答且符合 answer key，沒有被反問；第一個字在送出後 5 秒內出現
-- [ ] Q2→Q3 的追問仍符合 answer key（不被反問）
-- [ ] server 測試（mock 模型）：沒上文且判斷為「有」時，回固定句且沒有呼叫檢索；判斷為「沒有」或問題不含代名詞時照常回答
+- [x] 按「新對話」後直接問 Q3（沒有上文），不會回答成大直計畫的年份
+- [x] 同一批文件下，Q2、Q4、Q5、Q9、Q11 第一題照常回答且符合 answer key，沒有被反問；第一個字在送出後 5 秒內出現
+- [x] Q2→Q3 的追問仍符合 answer key（不被反問）
+- [x] server 測試（mock 模型）：沒上文且判斷為「沒有說出名稱」時，回固定句、沒有出處、模型的回答沒有送出；判斷為「有說出名稱」或問題不含代名詞時照常回答
 
 ## Strikes
 
@@ -25,3 +25,14 @@
 - 試過（06b 第 1 次，implementer）：照使用者的決定實作：對話第一題含「它／那／這／其」時，`generateText`（`CHAT_MODEL`）判斷「有沒有說出要問的對象的名稱」（附正反例，例子不含驗收題），同時跑檢索＋回答並暫存；「沒有」就中止回答、只送「請問你指的是哪個計畫或主題？」不帶出處，「有」就送出暫存的回答。stub 加 `verdict`／`verdictPrompts`，server 測試 4 條（含突變測試確認會紅），live 加「新對話後問 Q3」。保存在分支 `strike/06b-attempt-1`。
 - 觀察到：第 1 次驗證跑在 lint 紅（2 條 ESLint：無 await 的 async generator、throw 非 Error），屬自己的疏失、修掉。第 2 次驗證：lint、typecheck、單元測試 40/40、E2E 26/26 全綠；live 14 個 13 綠：新對話後問 Q3 回固定句、無出處（舊程式同一測試答成「2008 秋–2012 春、20 多個案例」）；Q2、Q4、Q5、Q9、Q11、Q3 追問、Q12、C1 都綠，第一個字都在 5 秒內。唯一紅的是 Q10（「我想去拿別人分享的東西，取件前要先確認什麼？」）：回答寫「交接方式」，沒有「取件方式」字樣。
 - 假設：Q10 不含「它／那／這／其」，不經判斷，走的程式路徑跟 06a 相同，紅的是模型措辭的變異，不是 06b 造成的；驗收規則只允許為首字延遲重跑，所以算第二次 strike。下一步：重跑 Q10 數次確認是變異，若是，考慮把 answer key 的「取件方式」加上「交接方式」這種說法（需使用者同意，因為是改驗收），然後以 attempt-1 的程式重做驗證。
+- 使用者判斷（2026-11-04）：Q10 的「交接方式」是措辭變異，不診斷、answer key 不動；用 `strike/06b-attempt-1` 的程式重跑驗證。第 4 條驗收原本寫反了判斷方向，且「沒有呼叫檢索」和「判斷與檢索同時開始」矛盾，改成驗「回答沒有送出」。
+- 重試驗證（2026-11-04，程式取自 `strike/06b-attempt-1`）：full suite 綠（unit 40/40、E2E 26/26）；第一次 live 14/14 綠；第二次 live 13/14，Q10 缺「物品狀況」（這次回答有「取件方式」）。Q10 不含代名詞、不經判斷，送給模型的 prompt 與 06a 相同，依使用者判斷記為 Q10 本身的措辭變異，留給 ticket 10 處理。06b 自己的測試兩次都綠。
+
+## Receipt
+
+| Acceptance criterion                                                                                        | Test                                                                                      | Observed output                                                                                                                                                                                                                                                                          | Screenshot                                     |
+| ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| 按「新對話」後直接問 Q3（沒有上文），不會回答成大直計畫的年份                                               | `web/e2e/answers.live.spec.ts:234`                                                        | `Q3 after 新對話 asks which subject is meant` 兩次 live 都通過；回答＝「請問你指的是哪個計畫或主題？」，沒有出處清單，不含 2008/2012                                                                                                                                                     | `.scratch/kb-chatbot/evidence/06b/1.png`       |
+| Q2、Q4、Q5、Q9、Q11 第一題照常回答且符合 answer key，沒被反問；第一個字 5 秒內                              | `web/e2e/answers.live.spec.ts:196`（逐題 `expectMatches`），`:202`（第一個字 < 5,000 ms） | 第二次 live：Q2 passed 2380 ms、Q4 passed 2878 ms、Q5 passed 2378 ms、Q9 passed 2863 ms、Q11 passed 2367 ms；第一次 live 同五題也全過                                                                                                                                                    | `.scratch/kb-chatbot/evidence/06b/2.png`（Q2） |
+| Q2→Q3 的追問仍符合 answer key（不被反問）                                                                   | `web/e2e/answers.live.spec.ts:222`                                                        | `Q3 follows up Q2` passed；回答「活動舉辦於 2008 年至 2012 年…累積共 20 多個案例」；出處 `[1] 05-projects-and-practice.md › … › A1. 一百元的大直社區改造計畫（2008–2012）`                                                                                                               | `.scratch/kb-chatbot/evidence/06b/3.png`       |
+| server 測試：沒上文且判斷「沒有說出名稱」時回固定句、沒有出處、回答沒送出；判斷「有」或不含代名詞時照常回答 | `server/src/chat.test.ts:259`、`:272`、`:285`                                             | `asks which subject is meant, citing nothing, when the check finds no name` ✓（文字只有 CLARIFY、沒有 data-citation）；`is answered as usual, with citations, when the check finds a name` ✓；`is not checked when it has no pointing word` ✓（verdictPrompts 0 次）；server `40 passed` | n/a                                            |

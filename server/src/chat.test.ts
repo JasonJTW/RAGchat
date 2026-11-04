@@ -238,6 +238,72 @@ describe("POST /api/chat", () => {
     expect(chat.prompts[0]).toContain("旅梯計畫總共巡迴了幾站？是哪幾年？");
   });
 
+  describe("a first question with a pronoun", () => {
+    const Q3 = "那它是哪幾年辦的？總共做了幾個案例？";
+    const CLARIFY = "請問你指的是哪個計畫或主題？";
+    const textOf = (parts: Awaited<ReturnType<typeof ask>>) =>
+      parts
+        .filter((p) => p.type === "text-delta")
+        .map((p) => p.delta)
+        .join("");
+
+    it("asks which subject is meant, citing nothing, when the check finds no name", async () => {
+      const { chat } = installStubModels();
+      chat.verdict = "沒有";
+      const app = await startServerWithUpload();
+
+      const parts = await ask(app, Q3);
+
+      expect(chat.verdictPrompts).toHaveLength(1);
+      expect(chat.verdictPrompts[0]).toContain(Q3);
+      expect(textOf(parts)).toBe(CLARIFY);
+      expect(parts.some((p) => p.type === "data-citation")).toBe(false);
+    });
+
+    it("is answered as usual, with citations, when the check finds a name", async () => {
+      const { chat } = installStubModels();
+      chat.verdict = "有";
+      chat.reply = "旅梯計畫的起點在台新。[1]";
+      const app = await startServerWithUpload();
+
+      const parts = await ask(app, "那個旅梯計畫的起點在哪裡？");
+
+      expect(chat.verdictPrompts).toHaveLength(1);
+      expect(textOf(parts)).toBe("旅梯計畫的起點在台新。[1]");
+      expect(parts.filter((p) => p.type === "data-citation")).toHaveLength(1);
+    });
+
+    it("is not checked when it has no pointing word", async () => {
+      const { chat } = installStubModels();
+      chat.verdict = "沒有";
+      chat.reply = "旅梯計畫巡迴了 5 站。[1]";
+      const app = await startServerWithUpload();
+
+      const parts = await ask(app, "旅梯計畫總共巡迴了幾站？是哪幾年？");
+
+      expect(chat.verdictPrompts).toHaveLength(0);
+      expect(textOf(parts)).toBe("旅梯計畫巡迴了 5 站。[1]");
+    });
+
+    it("is not checked as a follow-up", async () => {
+      const { chat } = installStubModels();
+      chat.verdict = "沒有";
+      chat.reply = "2008 到 2012 年，20 多個案例。[1]";
+      const app = await startServerWithUpload();
+
+      const parts = await ask(app, Q3, [
+        {
+          role: "user",
+          text: "一百元的大直社區改造計畫，每個學生最多可以花多少錢？",
+        },
+        { role: "assistant", text: "每人上限新台幣 100 元。[1]" },
+      ]);
+
+      expect(chat.verdictPrompts).toHaveLength(0);
+      expect(textOf(parts)).toBe("2008 到 2012 年，20 多個案例。[1]");
+    });
+  });
+
   describe("a follow-up question", () => {
     const Q2 = "一百元的大直社區改造計畫，每個學生最多可以花多少錢？";
     const A2 = "每人上限新台幣 100 元，以廢料為主要材料。[1]";
