@@ -27,14 +27,27 @@ async function startServerWithUpload() {
   return app;
 }
 
-/** Asks one question and returns the UI message stream's parts. */
-async function ask(app: Parameters<typeof request>[0], question: string) {
+type ChatTurn = { role: "user" | "assistant"; text: string };
+
+/**
+ * Asks the question after the earlier turns of the same conversation, and
+ * returns the UI message stream's parts.
+ */
+async function ask(
+  app: Parameters<typeof request>[0],
+  question: string,
+  history: ChatTurn[] = [],
+) {
   const res = await request(app)
     .post("/api/chat")
     .send({
-      messages: [
-        { id: "u1", role: "user", parts: [{ type: "text", text: question }] },
-      ],
+      messages: [...history, { role: "user", text: question }].map(
+        ({ role, text }, i) => ({
+          id: `m${i}`,
+          role,
+          parts: [{ type: "text", text }],
+        }),
+      ),
     })
     .buffer(true)
     .parse((r, done) => {
@@ -159,6 +172,20 @@ describe("POST /api/chat", () => {
     expect(at).toBeLessThan(prompt.indexOf("[3]"));
   });
 
+  it("cites passages marked with full-width brackets", async () => {
+    const { chat } = installStubModels();
+    chat.reply =
+      "旅梯計畫巡迴了 5 站。〔1〕 2017 年起跑。［2］ 起點在台新。【3】";
+    const app = await startServerWithUpload();
+
+    const parts = await ask(app, "旅梯計畫總共巡迴了幾站？是哪幾年？");
+
+    const markers = parts.flatMap((p) =>
+      p.type === "data-citation" && p.data ? [p.data.marker] : [],
+    );
+    expect(markers).toEqual([1, 2, 3]);
+  });
+
   it("refuses without calling the model when no passage is similar enough", async () => {
     const { chat, vectors } = installStubModels();
     const question = "我的帳號被停權了，要怎麼申訴？";
@@ -209,5 +236,60 @@ describe("POST /api/chat", () => {
 
     expect(chat.prompts[0]).toContain("C. 移動微型空間計畫");
     expect(chat.prompts[0]).toContain("旅梯計畫總共巡迴了幾站？是哪幾年？");
+  });
+
+  describe("a follow-up question", () => {
+    const Q2 = "一百元的大直社區改造計畫，每個學生最多可以花多少錢？";
+    const A2 = "每人上限新台幣 100 元，以廢料為主要材料。[1]";
+    const Q3 = "那它是哪幾年辦的？總共做了幾個案例？";
+    const STANDALONE =
+      "一百元的大直社區改造計畫是哪幾年辦的？總共做了幾個案例？";
+
+    it("is retrieved as the standalone question the model rewrites it to", async () => {
+      const { chat, embedded } = installStubModels();
+      chat.rewrite = STANDALONE;
+      const app = await startServerWithUpload();
+
+      await ask(app, Q3, [
+        { role: "user", text: Q2 },
+        { role: "assistant", text: A2 },
+      ]);
+
+      // The rewrite sees the conversation and the new question.
+      expect(chat.rewritePrompts).toHaveLength(1);
+      expect(chat.rewritePrompts[0]).toContain(Q2);
+      expect(chat.rewritePrompts[0]).toContain(A2);
+      expect(chat.rewritePrompts[0]).toContain(Q3);
+      // Retrieval embeds the rewritten question, not the one asked.
+      const queries = embedded["openai/text-embedding-3-small"];
+      expect(queries.at(-1)).toBe(STANDALONE);
+      expect(queries).not.toContain(Q3);
+    });
+
+    it("is answered with the conversation so far", async () => {
+      const { chat } = installStubModels();
+      chat.rewrite = STANDALONE;
+      const app = await startServerWithUpload();
+
+      await ask(app, Q3, [
+        { role: "user", text: Q2 },
+        { role: "assistant", text: A2 },
+      ]);
+
+      expect(chat.prompts).toHaveLength(1);
+      expect(chat.prompts[0]).toContain(Q2);
+      expect(chat.prompts[0]).toContain(A2);
+      expect(chat.prompts[0]).toContain(Q3);
+    });
+
+    it("is not rewritten when it opens the conversation", async () => {
+      const { chat, embedded } = installStubModels();
+      const app = await startServerWithUpload();
+
+      await ask(app, Q2);
+
+      expect(chat.rewritePrompts).toHaveLength(0);
+      expect(embedded["openai/text-embedding-3-small"].at(-1)).toBe(Q2);
+    });
   });
 });

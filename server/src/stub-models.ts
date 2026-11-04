@@ -11,9 +11,14 @@ export interface StubChat {
   reply: string;
   /** Each prompt flattened to text: the system prompt, then each message. */
   prompts: string[];
+  /** Returned whole when a follow-up is rewritten into a standalone question. */
+  rewrite: string;
+  /** Each rewrite prompt, flattened like `prompts`. */
+  rewritePrompts: string[];
 }
 
 export const STUB_CHAT_REPLY = "這是假模型的回答，依據第 1 段。[1]";
+export const STUB_CHAT_REWRITE = "旅梯計畫總共巡迴了幾站？是哪幾年？";
 
 /**
  * Replaces the AI Gateway with a fake provider, without a network call: any
@@ -28,7 +33,12 @@ export function installStubModels(): {
   vectors: Map<string, number[]>;
 } {
   const embedded: Record<string, string[]> = {};
-  const chat: StubChat = { reply: STUB_CHAT_REPLY, prompts: [] };
+  const chat: StubChat = {
+    reply: STUB_CHAT_REPLY,
+    prompts: [],
+    rewrite: STUB_CHAT_REWRITE,
+    rewritePrompts: [],
+  };
   const vectors = new Map<string, number[]>();
   const provider = new MockProviderV4();
   provider.embeddingModel = (modelId: string) =>
@@ -48,18 +58,17 @@ export function installStubModels(): {
   provider.languageModel = (modelId: string) =>
     new MockLanguageModelV4({
       modelId,
+      doGenerate: ({ prompt }) => {
+        chat.rewritePrompts.push(flatten(prompt));
+        return Promise.resolve({
+          content: [{ type: "text" as const, text: chat.rewrite }],
+          finishReason: { unified: "stop" as const, raw: undefined },
+          usage: NO_USAGE,
+          warnings: [],
+        });
+      },
       doStream: ({ prompt }) => {
-        chat.prompts.push(
-          prompt
-            .map((message) =>
-              typeof message.content === "string"
-                ? message.content
-                : message.content
-                    .map((part) => (part.type === "text" ? part.text : ""))
-                    .join(""),
-            )
-            .join("\n\n"),
-        );
+        chat.prompts.push(flatten(prompt));
         return Promise.resolve({
           stream: simulateReadableStream({
             chunkDelayInMs: 10,
@@ -74,15 +83,7 @@ export function installStubModels(): {
               {
                 type: "finish" as const,
                 finishReason: { unified: "stop" as const, raw: undefined },
-                usage: {
-                  inputTokens: {
-                    total: 0,
-                    noCache: 0,
-                    cacheRead: 0,
-                    cacheWrite: 0,
-                  },
-                  outputTokens: { total: 0, text: 0, reasoning: 0 },
-                },
+                usage: NO_USAGE,
               },
             ],
           }),
@@ -91,6 +92,26 @@ export function installStubModels(): {
     });
   globalThis.AI_SDK_DEFAULT_PROVIDER = provider;
   return { embedded, chat, vectors };
+}
+
+const NO_USAGE = {
+  inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
+  outputTokens: { total: 0, text: 0, reasoning: 0 },
+};
+
+// The system prompt, then each message, as text.
+function flatten(
+  prompt: { content: string | { type: string; text?: string }[] }[],
+): string {
+  return prompt
+    .map((message) =>
+      typeof message.content === "string"
+        ? message.content
+        : message.content
+            .map((part) => (part.type === "text" ? (part.text ?? "") : ""))
+            .join(""),
+    )
+    .join("\n\n");
 }
 
 // Hashes character bigrams into 64 buckets, so texts sharing words point the

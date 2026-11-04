@@ -1,13 +1,30 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { logIn, upload } from "./admin-login";
-import { ask } from "./ask";
+import { ask, askFollowUp } from "./ask";
 
 // Answer-key entries checked against the real model
 // (.scratch/kb-chatbot/fixtures/answer-key.md). `contains` lists facts; a fact
 // written several ways is an array, and any one way matches. `cites` lists
 // locations as "file › heading › …"; a citation matches when its label starts
 // with the file and includes every heading.
-const ANSWER_KEY = [
+interface Entry {
+  id: string;
+  question: string;
+  contains: (string | string[])[];
+  cites: string[];
+}
+
+const Q3: Entry = {
+  id: "Q3",
+  question: "那它是哪幾年辦的？總共做了幾個案例？",
+  contains: ["2008", "2012", ["20 多個", "二十多個"]],
+  cites: [
+    "05-projects-and-practice.md › A. 教學 › A1. 一百元的大直社區改造計畫",
+    "03-timeline.md › 理念實踐期（2008–2014）",
+  ],
+};
+
+const ANSWER_KEY: Entry[] = [
   {
     id: "Q1",
     question: "在 megaweaving.net 交換物品要付錢嗎？",
@@ -117,6 +134,39 @@ function normalize(text: string): string {
     .toLowerCase();
 }
 
+async function expectMatches(entry: Entry, answer: Locator, text: string) {
+  test
+    .info()
+    .annotations.push({ type: `${entry.id} answer`, description: text });
+  for (const fact of entry.contains) {
+    const ways = Array.isArray(fact) ? fact : [fact];
+    expect(
+      ways.some((way) => normalize(text).includes(normalize(way))),
+      `answer contains ${ways.join("｜")}:\n${text}`,
+    ).toBe(true);
+  }
+  const labels = await answer
+    .getByRole("list", { name: "出處" })
+    .getByRole("listitem")
+    .locator("summary")
+    .allTextContents();
+  test.info().annotations.push({
+    type: `${entry.id} citations`,
+    description: labels.join("\n"),
+  });
+  await answer.screenshot({
+    path: test.info().outputPath(`${entry.id}-answer.png`),
+  });
+  expect(
+    labels.some((label) =>
+      entry.cites.some((location) =>
+        citesMatch(label.replace(/^\[\d+\] /, ""), location),
+      ),
+    ),
+    `a citation points to ${entry.cites.join("｜")}:\n${labels.join("\n")}`,
+  ).toBe(true);
+}
+
 function citesMatch(label: string, location: string): boolean {
   const [file, ...headings] = location.split(" › ");
   return label.startsWith(file) && headings.every((h) => label.includes(h));
@@ -143,41 +193,14 @@ test.describe("answer key @live", () => {
         page,
         entry.question,
       );
-      test
-        .info()
-        .annotations.push(
-          { type: "answer", description: text },
-          { type: "first character", description: `${firstCharMs} ms` },
-        );
-
+      await expectMatches(entry, answer, text);
       // Streams: the first character within 5 s, then grows.
+      test.info().annotations.push({
+        type: "first character",
+        description: `${firstCharMs} ms`,
+      });
       expect(firstCharMs).toBeLessThan(5_000);
       expect(distinctLengths).toBeGreaterThan(5);
-      for (const fact of entry.contains) {
-        const ways = Array.isArray(fact) ? fact : [fact];
-        expect(
-          ways.some((way) => normalize(text).includes(normalize(way))),
-          `answer contains ${ways.join("｜")}:\n${text}`,
-        ).toBe(true);
-      }
-      const labels = await answer
-        .getByRole("list", { name: "出處" })
-        .getByRole("listitem")
-        .locator("summary")
-        .allTextContents();
-      test.info().annotations.push({
-        type: "citations",
-        description: labels.join("\n"),
-      });
-      await answer.screenshot({ path: test.info().outputPath("answer.png") });
-      expect(
-        labels.some((label) =>
-          entry.cites.some((location) =>
-            citesMatch(label.replace(/^\[\d+\] /, ""), location),
-          ),
-        ),
-        `a citation points to ${entry.cites.join("｜")}:\n${labels.join("\n")}`,
-      ).toBe(true);
     });
 
   test("Q12: 我的帳號被停權了，要怎麼申訴？ is refused", async ({ page }) => {
@@ -189,6 +212,14 @@ test.describe("answer key @live", () => {
     expect(text).toContain("這個問題我無法回答");
     expect(text).toContain("support@megaweaving.example");
     await expect(answer.getByRole("list", { name: "出處" })).toHaveCount(0);
+  });
+
+  test("Q3 follows up Q2", async ({ page }) => {
+    test.setTimeout(300_000);
+    await ask(page, ANSWER_KEY.find((e) => e.id === "Q2")!.question);
+
+    const followUp = await askFollowUp(page, Q3.question);
+    await expectMatches(Q3, followUp.answer, followUp.text);
   });
 
   test("C1: Q4's citation expands to the 移動微型空間計畫 table", async ({

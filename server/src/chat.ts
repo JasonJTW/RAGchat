@@ -1,6 +1,7 @@
 import type { Response } from "express";
 import {
   createUIMessageStream,
+  generateText,
   pipeUIMessageStreamToResponse,
   streamText,
 } from "ai";
@@ -44,13 +45,26 @@ export interface ChatMessage {
   parts: { type: string; text?: string }[];
 }
 
-/** Answers the latest user message from the stored documents, streamed. */
+const REWRITE_PROMPT = `把使用者的最新問題改寫成一句不需要上文也看得懂的獨立問題：把代名詞與省略的主詞換成對話裡指的那件事。
+- 只輸出改寫後的問題，不要回答、不要解釋。
+- 一律用繁體中文。
+- 最新問題本身已經完整時，原樣輸出。`;
+
+/**
+ * Answers the latest user message from the stored documents, streamed. A
+ * follow-up is first rewritten into a standalone question for retrieval; the
+ * answer still sees the whole conversation.
+ */
 export function streamAnswer(res: Response, messages: ChatMessage[]) {
-  const question = latestUserText(messages);
+  const turns = textTurns(messages);
+  const question = turns.at(-1)?.role === "user" ? turns.pop()!.content : "";
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
+      const query = turns.length
+        ? await standaloneQuestion(turns, question)
+        : question;
       const { passages, similarity } = await retrieve(
-        question,
+        query,
         PASSAGES_PER_ANSWER,
       );
       writer.write({ type: "start" });
@@ -65,9 +79,15 @@ export function streamAnswer(res: Response, messages: ChatMessage[]) {
         model: CHAT_MODEL,
         system: SYSTEM_PROMPT,
         providerOptions: CHAT_PROVIDER_OPTIONS,
-        prompt: `段落：\n\n${passages
-          .map((p, i) => `[${i + 1}] ${p.label}\n${p.text}`)
-          .join("\n\n")}\n\n問題：${question}`,
+        messages: [
+          ...turns,
+          {
+            role: "user",
+            content: `段落：\n\n${passages
+              .map((p, i) => `[${i + 1}] ${p.label}\n${p.text}`)
+              .join("\n\n")}\n\n問題：${question}`,
+          },
+        ],
       });
       let answer = "";
       for await (const delta of result.textStream) {
@@ -99,20 +119,50 @@ export function streamAnswer(res: Response, messages: ChatMessage[]) {
   });
 }
 
-function latestUserText(messages: ChatMessage[]): string {
-  const latest = [...messages]
-    .reverse()
-    .find((message) => message.role === "user");
-  return (latest?.parts ?? [])
-    .map((part) => (part.type === "text" ? (part.text ?? "") : ""))
-    .join("");
+interface Turn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+// The conversation as plain-text turns; citations and other parts dropped.
+function textTurns(messages: ChatMessage[]): Turn[] {
+  return messages.flatMap((message) =>
+    message.role === "user" || message.role === "assistant"
+      ? [
+          {
+            role: message.role,
+            content: message.parts
+              .map((part) => (part.type === "text" ? (part.text ?? "") : ""))
+              .join(""),
+          },
+        ]
+      : [],
+  );
+}
+
+async function standaloneQuestion(
+  turns: Turn[],
+  question: string,
+): Promise<string> {
+  const { text } = await generateText({
+    model: CHAT_MODEL,
+    system: REWRITE_PROMPT,
+    providerOptions: CHAT_PROVIDER_OPTIONS,
+    prompt: `對話：\n${turns
+      .map((t) => `${t.role === "user" ? "使用者" : "助理"}：${t.content}`)
+      .join("\n")}\n\n最新問題：${question}`,
+  });
+  return text.trim() || question;
 }
 
 // The passages the answer marks with [n], in marker order. Marks may be
-// combined, e.g. [1, 3] or [1][3].
+// combined, e.g. [1, 3] or [1][3], and the model sometimes writes them in
+// full-width brackets: 〔1〕, ［1］, 【1】.
 function cited(answer: string, passages: Passage[]): Citation[] {
   const markers = new Set<number>();
-  for (const [, list] of answer.matchAll(/\[(\d+(?:\s*[,，、]\s*\d+)*)\]/g))
+  for (const [, list] of answer.matchAll(
+    /[[〔［【](\d+(?:\s*[,，、]\s*\d+)*)[\]〕］】]/g,
+  ))
     for (const n of list.split(/[,，、]/)) markers.add(Number(n.trim()));
   return [...markers]
     .filter((n) => n >= 1 && n <= passages.length)
