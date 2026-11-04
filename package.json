@@ -14,6 +14,7 @@
     "test": "npm test --workspaces",
     "format": "prettier --write .",
     "setup:repo": "bash scripts/setup-repo.sh",
+    "setup:worktree": "bash scripts/setup-worktree.sh",
     "test:e2e": "npm run test:e2e -w web",
     "prepare": "lefthook install",
     "typecheck": "npm run typecheck --workspaces",
