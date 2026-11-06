@@ -8,6 +8,7 @@
 - `npm run setup:repo`: apply the GitHub repo settings (auto-merge on, delete branch on merge) and the `scripts/main-ruleset.json` ruleset (needs admin `gh`). **Run once after creating a repo from this starter.**
 - Env: one `.env` in the repo root (template `.env.example`); the server loads it on `dev` and `start`. Add every new variable to `.env.example`.
 - `npm run setup:worktree`: link the main checkout's `.env` into a new git worktree (creating it from `.env.example` if missing) and run `npm ci`. T3 Code runs it on worktree creation; run it yourself when a worktree lacks `.env` or `node_modules`.
+- Pull starter updates: `git remote add starter https://github.com/JasonJTW/starter.git` (once per clone), then `git fetch starter` and `git merge starter/main` on a branch, and open a PR. Shared history makes the merge bring in only new starter commits. A squash merge of that PR breaks the link, so merge it with a merge commit.
 - CI (`.github/workflows/ci.yml`) runs a production dependency audit, lint, typecheck, test, build, and E2E on every PR and push to `main`.
 
 ## Conventions
