@@ -1,5 +1,5 @@
 {
-  "name": "ai-starter",
+  "name": "ragchat",
   "private": true,
   "workspaces": [
     "web",
