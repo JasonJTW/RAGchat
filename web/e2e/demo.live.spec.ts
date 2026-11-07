@@ -375,6 +375,8 @@ test.describe("demo script @live", () => {
     await logIn(page);
     const rows = await documentRows(page);
     for (const name of ["faq.txt", "07-megaweaving-net-platform.md"]) {
+      // A retry finds the documents already deleted by the first attempt.
+      if (!(await rows.filter({ hasText: name }).count())) continue;
       await rows
         .filter({ hasText: name })
         .getByRole("button", { name: "刪除" })

@@ -28,6 +28,8 @@ export interface StubJev {
   error?: Error;
   /** When set, a request never answers; it fails once its signal aborts. */
   hangs?: boolean;
+  /** When set, a request answers after this many milliseconds. */
+  delayMs?: number;
 }
 
 export const STUB_CHAT_REPLY = "這是假模型的回答，依據第 1 段。[1]";
@@ -125,7 +127,10 @@ export function installStubModels(): {
             reject(new Error("aborted")),
           ),
         );
-      return Promise.resolve({
+      const delay = new Promise((resolve) =>
+        setTimeout(resolve, jev.delayMs ?? 0),
+      );
+      return delay.then(() => ({
         model: "jev-stub",
         answers: Object.fromEntries(
           Object.keys(request.questions).map((id) => [
@@ -134,7 +139,7 @@ export function installStubModels(): {
           ]),
         ),
         usage: { input_tokens: 0, output_tokens: 0 },
-      });
+      }));
     },
   };
   globalThis.SYSTEM_ONE_CLIENT = fakeJev as unknown as SystemOne;

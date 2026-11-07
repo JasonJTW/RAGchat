@@ -274,6 +274,25 @@ describe("POST /api/chat", () => {
       expect(parts.filter((p) => p.type === "data-citation")).toHaveLength(1);
     });
 
+    it("is retrieved while Jev is still checking it", async () => {
+      const { embedded, jev } = installStubModels();
+      jev.noul = 0.49;
+      jev.delayMs = 300;
+      const app = await startServerWithUpload();
+
+      let embeddedBeforeJev = false;
+      const probe = new Promise<void>((resolve) =>
+        setTimeout(() => {
+          embeddedBeforeJev = Object.values(embedded).flat().includes(Q3);
+          resolve();
+        }, 150),
+      );
+      await ask(app, Q3);
+      await probe;
+
+      expect(embeddedBeforeJev).toBe(true);
+    });
+
     it("is answered as usual when Jev fails", async () => {
       const { chat, jev } = installStubModels();
       jev.error = new Error("503 Service Unavailable");

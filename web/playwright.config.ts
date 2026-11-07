@@ -15,7 +15,9 @@ export default defineConfig({
   // Tests share one stateful server (the document list), so run them one at a time.
   workers: 1,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
+  // Live answers vary run to run: about 1 in 25 takes over 5 s to its first
+  // word on the model's side alone (ticket 12's Strikes), so retry them once.
+  retries: process.env.CI ? 2 : process.env.LIVE ? 1 : 0,
   reporter: "html",
   use: {
     baseURL: `http://localhost:${WEB_PORT}`,

@@ -37,7 +37,7 @@ const SYSTEM_PROMPT = `你是「大量交織 megaweaving」的客服助理。
 - 先直接回答問題，再用一兩句補上段落裡跟答案同一處的關鍵細節：條件、材料、人數、年份、原因或出處（例如「不是原創」就說出它源自哪裡）。
 - 問題問要做哪些事、確認什麼、有哪幾類時，段落裡相關的每一項都要列出，不要只挑其中幾項。
 - 每個事實後面用段落編號標出處，例如 [1]、[2]；只標你實際用到的段落，不要另寫「出處：」。
-- 只有當段落對同一件事給出不同說法時（例如人數不同）：先給最新且有日期的說法，再列出其他說法與各自的年份、來源，並說明這些說法未經確認。說法一致時不要提矛盾。
+- 只有當段落對同一件事給出不同說法時（例如人數不同）：先給最新且有日期的說法，再列出其他說法的具體數字與各自的年份、來源，並說明這些說法未經確認。說法一致時不要提矛盾。
 - 例外：段落完全沒有提到問題要問的事時，不要作答，整個回覆只寫這一句（不加段落編號）：${REFUSAL}
   段落有答案時，照上面的規則完整回答，不要寫這一句。`;
 
@@ -79,8 +79,9 @@ const CLARIFY = "請問你指的是哪個計畫或主題？";
  * Answers the latest user message from the stored documents, streamed. A
  * follow-up is first rewritten into a standalone question for retrieval; the
  * answer still sees the whole conversation. A first question with a pointing
- * word (它／那／這／其) is first checked by Jev for naming its subject; when
- * it doesn't, the reply asks which subject is meant instead of answering.
+ * word (它／那／這／其) is checked by Jev for naming its subject, alongside
+ * retrieval; when it doesn't, the reply asks which subject is meant instead
+ * of answering.
  */
 export function streamAnswer(res: Response, messages: ChatMessage[]) {
   const turns = textTurns(messages);
@@ -90,6 +91,11 @@ export function streamAnswer(res: Response, messages: ChatMessage[]) {
       const abort = new AbortController();
       // A client that leaves stops the answer too (after a full answer, a no-op).
       res.once("close", () => abort.abort());
+      // Retrieval runs while Jev checks the question; the answer model is
+      // called only once both are done and Jev found a name.
+      const found = findPassages(turns, question);
+      // When the reply asks for the subject, the passages go unread.
+      found.catch(() => {});
       const clarify =
         !turns.length &&
         POINTING_WORD.test(question) &&
@@ -100,7 +106,12 @@ export function streamAnswer(res: Response, messages: ChatMessage[]) {
         writer.write({ type: "text-delta", id: "answer", delta: CLARIFY });
         writer.write({ type: "text-end", id: "answer" });
       } else {
-        for await (const part of answerParts(turns, question, abort.signal))
+        for await (const part of answerParts(
+          turns,
+          question,
+          await found,
+          abort.signal,
+        ))
           writer.write(part);
       }
       writer.write({ type: "finish" });
@@ -119,16 +130,21 @@ export function streamAnswer(res: Response, messages: ChatMessage[]) {
   });
 }
 
+// The passages for the question; a follow-up is first made standalone.
+async function findPassages(turns: Turn[], question: string) {
+  const query = turns.length
+    ? await standaloneQuestion(turns, question)
+    : question;
+  return retrieve(query, PASSAGES_PER_ANSWER);
+}
+
 // The answer's text deltas, its text end, then its citations.
 async function* answerParts(
   turns: Turn[],
   question: string,
+  { passages, similarity }: Awaited<ReturnType<typeof findPassages>>,
   abortSignal: AbortSignal,
 ): AsyncGenerator<UIMessageChunk> {
-  const query = turns.length
-    ? await standaloneQuestion(turns, question)
-    : question;
-  const { passages, similarity } = await retrieve(query, PASSAGES_PER_ANSWER);
   if (abortSignal.aborted) return;
   if (similarity < MIN_SIMILARITY) {
     yield { type: "text-delta", id: "answer", delta: REFUSAL };
