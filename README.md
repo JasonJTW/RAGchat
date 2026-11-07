@@ -1,52 +1,73 @@
-# ai-starter
+# RAGchat
 
-Next.js (web) + Express (server), npm workspaces.
+Knowledge-base chatbot POC for megaweaving (大量交織). Users ask questions in Chinese on the chat page; the bot answers from documents an admin has uploaded and lists its sources under each answer. Questions the documents don't cover get a fixed refusal with the support email.
+
+- Chat: `http://localhost:3000/` (no login)
+- Admin: `http://localhost:3000/admin` (log in to upload, list, and delete documents)
+
+Spec and acceptance criteria: `.scratch/kb-chatbot/spec.md`; tickets: `.scratch/kb-chatbot/issues/`.
+
+## Features
+
+- **Upload**: `.pdf`, `.md`, `.txt`, up to 10 files at a time; other formats show 「不支援的檔案格式」. Scanned PDFs (no text layer) get 0 chunks and are marked 「無法抽出文字」.
+- **Chunking**: markdown splits on the heading hierarchy, each chunk prefixed with its `file › H1 › H2 › H3` path; PDFs split by page; txt detects Q/A pairs or splits on blank lines and sentences. 800-token limit; tables are never split mid-row. Details: `.scratch/kb-chatbot/md-chunking-report.md`.
+- **Hybrid retrieval**: embedding cosine top 20 + BM25 (Chinese character bigrams) top 20, merged with RRF; the top 6 chunks go to the LLM.
+- **Citations**: markdown shows `file › heading path`, PDF shows `file › 第 N 頁`, txt shows `file › opening of the paragraph`; clicking a citation expands the source text.
+- **Refusal**: if the best cosine is below 0.30 the server refuses without calling the LLM; otherwise the LLM answers only from the chunks and, when they don't cover the question, replies 「這個問題我無法回答，請來信客服 support@megaweaving.example。」 with no citations.
+- **Follow-ups and new chat**: follow-up questions are rewritten into standalone questions before retrieval; the 「新對話」 button clears the conversation (history lives only in the browser tab).
+- **Streaming**: answers stream word by word; the first word appears within 5 s.
+
+## Architecture
+
+npm workspaces:
 
 | Path      | Stack                                                                                        |
 | --------- | -------------------------------------------------------------------------------------------- |
 | `web/`    | Next.js App Router, TypeScript, Tailwind, shadcn/ui, Vercel AI SDK, zod, react-markdown, SWR |
-| `server/` | Express 5, TypeScript, tsx                                                                   |
+| `server/` | Express 5, TypeScript, tsx, Vercel AI SDK, pdfjs-dist, js-tiktoken                           |
+
+- Next rewrites `/api/*` to the server (`SERVER_URL`, default `http://localhost:4000`).
+- All chat and embedding calls go through the Vercel AI SDK and the Vercel AI Gateway. Models are `<provider>/<model>` strings (`server/src/models.ts`); switching models only changes an env var.
+- Documents, chunks, and embeddings are stored as JSON in `server/data/` (override with `DATA_DIR`) and loaded into memory at startup. Changing `EMBEDDING_MODEL` re-embeds every document on the next start.
+- The admin has a single username/password from env vars. Login issues an httpOnly session cookie held in memory, so a server restart logs the admin out.
+- API contract: `server/openapi.yaml`.
+
+## Getting started
 
 ```bash
 npm install
-npm run dev          # web :3000 + server :4000
-npm run dev:web
-npm run dev:server
+cp .env.example .env   # fill in the variables below
+npm run dev            # web :3000 + server :4000
 ```
 
-Server health: `GET http://localhost:4000/health`
+| Variable             | Purpose                                                  |
+| -------------------- | -------------------------------------------------------- |
+| `AI_GATEWAY_API_KEY` | Vercel AI Gateway key                                    |
+| `CHAT_MODEL`         | Chat model, default `openai/gpt-5-mini`                  |
+| `EMBEDDING_MODEL`    | Embedding model, default `openai/text-embedding-3-small` |
+| `ADMIN_USERNAME`     | Admin username, default `admin`                          |
+| `ADMIN_PASSWORD`     | Admin password                                           |
+
+Sample documents: `.scratch/kb-chatbot/fixtures/upload/`; expected answers: `.scratch/kb-chatbot/fixtures/answer-key.md`.
+
+## Testing
 
 ```bash
-npm test             # Vitest, all workspaces
-npm run test:e2e     # Playwright (web)
-npm run format       # Prettier
+npm test             # Vitest, all workspaces (no LLM calls)
+npm run test:e2e     # Playwright; starts its own web :3100 + server :4100, never touches a running dev server
+npm run test:live    # @live tests against the real LLM; needs AI_GATEWAY_API_KEY
+npm run lint && npm run typecheck
 ```
 
-Pre-commit hook (lefthook, installed by `npm install`): Prettier + ESLint on staged files, then typecheck + `npm test`. Commit is blocked if any step fails.
+Git hooks (lefthook, installed by `npm install`):
 
-Pre-push hook: `npm run test:e2e`; push is blocked if E2E fails. `npm install` also downloads Playwright's Chromium (`postinstall`).
+- pre-commit: Prettier + ESLint on staged files, then typecheck and `npm test`.
+- pre-push: refuses pushes to `main`, then runs `npm run test:e2e`.
 
-API contract: `server/openapi.yaml`. Claude Code config (hooks, subagents): `.claude/`.
+CI (`.github/workflows/ci.yml`) runs a dependency audit, lint, typecheck, test, build, and E2E on every PR and push to `main`. All changes reach `main` through a PR.
 
-## Recommended agent skills
+## Conventions
 
-`AGENTS.md` and `docs/agents/` follow the conventions of [mattpocock/skills](https://github.com/mattpocock/skills) (`/to-spec`, `/to-tickets`, `/triage`, `/tdd`, `/domain-modeling`, `/codebase-design`, …). Install them for your agent:
+`AGENTS.md` holds the commands, conventions, and design principles (deep modules). `docs/agents/` covers code review, the issue tracker, and more; `docs/adr/` holds architecture decisions.
 
-```bash
-npx skills add mattpocock/skills -g   # any agent (Codex, Cursor, Copilot, Gemini CLI, …)
-```
-
-Claude Code users get prompted to install the plugin from `.claude/settings.json` when they trust the folder.
-
-Project-specific skills go in `.agents/skills/` (committed). Claude Code only reads `.claude/skills/`, so link it once: `ln -s ../.agents/skills .claude/skills`.
-
-## New project from this template
-
-```bash
-gh repo create my-app --template JasonJTW/starter --clone --private
-cd my-app && npm install
-claude setup-token                                    # Claude Pro/Max: prints a token
-gh secret set CLAUDE_CODE_OAUTH_TOKEN -R JasonJTW/my-app
-```
-
-Until the secret is set, the Claude workflows fail with an error naming it (fork PRs skip review, since forks never receive secrets). CI (`.github/workflows/ci.yml`) needs no setup.
+This repo was created from [JasonJTW/starter](https://github.com/JasonJTW/starter); see `AGENTS.md` for pulling starter updates.
