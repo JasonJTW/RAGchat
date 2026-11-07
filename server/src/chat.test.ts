@@ -247,61 +247,102 @@ describe("POST /api/chat", () => {
         .map((p) => p.delta)
         .join("");
 
-    it("asks which subject is meant, citing nothing, when the check finds no name", async () => {
-      const { chat } = installStubModels();
-      chat.verdict = "沒有";
+    it("asks which subject is meant, citing nothing and not answering, when Jev finds no name", async () => {
+      const { chat, jev } = installStubModels();
+      jev.noul = 0.5;
       const app = await startServerWithUpload();
 
       const parts = await ask(app, Q3);
 
-      expect(chat.verdictPrompts).toHaveLength(1);
-      expect(chat.verdictPrompts[0]).toContain(Q3);
+      expect(jev.states).toHaveLength(1);
+      expect(JSON.stringify(jev.states[0])).toContain(Q3);
       expect(textOf(parts)).toBe(CLARIFY);
       expect(parts.some((p) => p.type === "data-citation")).toBe(false);
+      expect(chat.prompts).toHaveLength(0);
     });
 
-    it("aborts the held answer when the check fails", async () => {
-      const { chat } = installStubModels();
-      chat.verdictError = new Error("gateway timeout");
-      const app = await startServerWithUpload();
-
-      const parts = await ask(app, Q3);
-
-      expect(parts.some((p) => p.type === "error")).toBe(true);
-      expect(textOf(parts)).not.toContain(chat.reply);
-      // Give the held answer time to reach the model if nothing stopped it.
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      expect(chat.streamSignals.every((signal) => signal.aborted)).toBe(true);
-    });
-
-    it("is answered as usual, with citations, when the check finds a name", async () => {
-      const { chat } = installStubModels();
-      chat.verdict = "有";
+    it("is answered as usual, with citations, when Jev finds a name", async () => {
+      const { chat, jev } = installStubModels();
+      jev.noul = 0.49;
       chat.reply = "旅梯計畫的起點在台新。[1]";
       const app = await startServerWithUpload();
 
       const parts = await ask(app, "那個旅梯計畫的起點在哪裡？");
 
-      expect(chat.verdictPrompts).toHaveLength(1);
+      expect(jev.states).toHaveLength(1);
       expect(textOf(parts)).toBe("旅梯計畫的起點在台新。[1]");
       expect(parts.filter((p) => p.type === "data-citation")).toHaveLength(1);
     });
 
-    it("is not checked when it has no pointing word", async () => {
+    it("is retrieved while Jev is still checking it", async () => {
+      const { embedded, jev } = installStubModels();
+      jev.noul = 0.49;
+      jev.delayMs = 300;
+      const app = await startServerWithUpload();
+
+      let embeddedBeforeJev = false;
+      const probe = new Promise<void>((resolve) =>
+        setTimeout(() => {
+          embeddedBeforeJev = Object.values(embedded).flat().includes(Q3);
+          resolve();
+        }, 150),
+      );
+      await ask(app, Q3);
+      await probe;
+
+      expect(embeddedBeforeJev).toBe(true);
+    });
+
+    it("is answered as usual when Jev fails", async () => {
+      const { chat, jev } = installStubModels();
+      jev.error = new Error("503 Service Unavailable");
+      const app = await startServerWithUpload();
+
+      const parts = await ask(app, Q3);
+
+      expect(textOf(parts)).toBe(chat.reply);
+      expect(parts.some((p) => p.type === "error")).toBe(false);
+    });
+
+    it("is answered as usual when Jev has not answered within 1.5 s", async () => {
+      const { chat, jev } = installStubModels();
+      jev.hangs = true;
+      const app = await startServerWithUpload();
+
+      const started = Date.now();
+      const parts = await ask(app, Q3);
+
+      expect(textOf(parts)).toBe(chat.reply);
+      expect(Date.now() - started).toBeGreaterThanOrEqual(1_500);
+      expect(Date.now() - started).toBeLessThan(3_000);
+    }, 10_000);
+
+    it("is answered as usual without JEV_API_KEY", async () => {
       const { chat } = installStubModels();
-      chat.verdict = "沒有";
+      globalThis.SYSTEM_ONE_CLIENT = undefined;
+      vi.stubEnv("JEV_API_KEY", "");
+      const app = await startServerWithUpload();
+
+      const parts = await ask(app, Q3);
+
+      expect(textOf(parts)).toBe(chat.reply);
+    });
+
+    it("is not checked when it has no pointing word", async () => {
+      const { chat, jev } = installStubModels();
+      jev.noul = 0.9;
       chat.reply = "旅梯計畫巡迴了 5 站。[1]";
       const app = await startServerWithUpload();
 
       const parts = await ask(app, "旅梯計畫總共巡迴了幾站？是哪幾年？");
 
-      expect(chat.verdictPrompts).toHaveLength(0);
+      expect(jev.states).toHaveLength(0);
       expect(textOf(parts)).toBe("旅梯計畫巡迴了 5 站。[1]");
     });
 
     it("is not checked as a follow-up", async () => {
-      const { chat } = installStubModels();
-      chat.verdict = "沒有";
+      const { chat, jev } = installStubModels();
+      jev.noul = 0.9;
       chat.reply = "2008 到 2012 年，20 多個案例。[1]";
       const app = await startServerWithUpload();
 
@@ -313,7 +354,7 @@ describe("POST /api/chat", () => {
         { role: "assistant", text: "每人上限新台幣 100 元。[1]" },
       ]);
 
-      expect(chat.verdictPrompts).toHaveLength(0);
+      expect(jev.states).toHaveLength(0);
       expect(textOf(parts)).toBe("2008 到 2012 年，20 多個案例。[1]");
     });
   });

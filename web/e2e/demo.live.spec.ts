@@ -11,13 +11,13 @@ import { ask, askFollowUp } from "./ask";
 
 const EVIDENCE = path.join(__dirname, "../../.scratch/kb-chatbot/evidence/10");
 
-/** The server reads the key from the shell, else the root .env (shell wins). */
-function hasGatewayKey(): boolean {
-  if ("AI_GATEWAY_API_KEY" in process.env)
-    return !!process.env.AI_GATEWAY_API_KEY;
+/** The server reads a key from the shell, else the root .env (shell wins). */
+function hasKey(name: string): boolean {
+  if (name in process.env) return !!process.env[name];
   const env = path.join(__dirname, "../../.env");
   return (
-    existsSync(env) && /^AI_GATEWAY_API_KEY=\S/m.test(readFileSync(env, "utf8"))
+    existsSync(env) &&
+    new RegExp(`^${name}=\\S`, "m").test(readFileSync(env, "utf8"))
   );
 }
 
@@ -241,7 +241,7 @@ function answerKeyTest(id: string) {
 }
 
 test.describe("demo script @live", () => {
-  test.skip(!hasGatewayKey(), "AI_GATEWAY_API_KEY is not set");
+  test.skip(!hasKey("AI_GATEWAY_API_KEY"), "AI_GATEWAY_API_KEY is not set");
 
   test("1. /admin without logging in leads to the login screen", async ({
     page,
@@ -375,6 +375,8 @@ test.describe("demo script @live", () => {
     await logIn(page);
     const rows = await documentRows(page);
     for (const name of ["faq.txt", "07-megaweaving-net-platform.md"]) {
+      // A retry finds the documents already deleted by the first attempt.
+      if (!(await rows.filter({ hasText: name }).count())) continue;
       await rows
         .filter({ hasText: name })
         .getByRole("button", { name: "刪除" })
@@ -395,17 +397,50 @@ test.describe("demo script @live", () => {
     );
   });
 
-  // Not a Demo Script step: ticket 06b's guard, run on the same documents.
-  test("Q3 after 新對話 asks which subject is meant", async ({ page }) => {
-    test.setTimeout(300_000);
-    await ask(page, KEY.Q2.question);
-    await page.getByRole("button", { name: "新對話" }).click();
+  // Not Demo Script steps: tickets 06b and 12, run on the same documents.
+  test.describe("a first question with a pronoun", () => {
+    test.skip(!hasKey("JEV_API_KEY"), "JEV_API_KEY is not set");
+    const EVIDENCE_12 = path.join(EVIDENCE, "../12");
 
-    const { answer, text } = await askFollowUp(page, KEY.Q3.question);
-    note("answer", text);
-    await answer.screenshot({ path: path.join(EVIDENCE, "06b.png") });
+    test("Q3 after 新對話 asks which subject is meant", async ({ page }) => {
+      test.setTimeout(300_000);
+      await ask(page, KEY.Q2.question);
+      await page.getByRole("button", { name: "新對話" }).click();
 
-    expect(text).toBe("請問你指的是哪個計畫或主題？");
-    await expect(answer.getByRole("list", { name: "出處" })).toHaveCount(0);
+      const { answer, text } = await askFollowUp(page, KEY.Q3.question);
+      note("answer", text);
+      await answer.screenshot({ path: path.join(EVIDENCE, "06b.png") });
+      await answer.screenshot({ path: path.join(EVIDENCE_12, "1.png") });
+
+      expect(text).toBe("請問你指的是哪個計畫或主題？");
+      expect(text).not.toMatch(/2008|2012/);
+      await expect(answer.getByRole("list", { name: "出處" })).toHaveCount(0);
+    });
+
+    test("one that names its subject is answered, with citations", async ({
+      page,
+    }) => {
+      test.setTimeout(180_000);
+      const reply = await ask(page, "那個旅梯計畫的起點在哪裡？");
+      note("answer", reply.text);
+      await reply.answer.screenshot({ path: path.join(EVIDENCE_12, "2.png") });
+
+      expect(reply.text).toContain("台新");
+      const labels = await reply.answer
+        .getByRole("list", { name: "出處" })
+        .getByRole("listitem")
+        .locator("summary")
+        .allTextContents();
+      note("citations", labels.join("\n"));
+      expect(
+        labels.some((label) =>
+          citesMatch(
+            label.replace(/^\[\d+\] /, ""),
+            "05-projects-and-practice.md › C. 移動微型空間計畫",
+          ),
+        ),
+      ).toBe(true);
+      expectStreamed("那個旅梯計畫", reply);
+    });
   });
 });
