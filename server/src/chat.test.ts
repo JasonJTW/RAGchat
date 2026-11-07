@@ -238,7 +238,7 @@ describe("POST /api/chat", () => {
     expect(chat.prompts[0]).toContain("旅梯計畫總共巡迴了幾站？是哪幾年？");
   });
 
-  describe("a first question with a pronoun", () => {
+  describe("a first question", () => {
     const Q3 = "那它是哪幾年辦的？總共做了幾個案例？";
     const CLARIFY = "請問你指的是哪個計畫或主題？";
     const textOf = (parts: Awaited<ReturnType<typeof ask>>) =>
@@ -328,16 +328,31 @@ describe("POST /api/chat", () => {
       expect(textOf(parts)).toBe(chat.reply);
     });
 
-    it("is not checked when it has no pointing word", async () => {
+    it("is checked even without a pointing word, and answered when Jev finds a name", async () => {
       const { chat, jev } = installStubModels();
-      jev.noul = 0.9;
+      jev.noul = 0.49;
       chat.reply = "旅梯計畫巡迴了 5 站。[1]";
       const app = await startServerWithUpload();
 
-      const parts = await ask(app, "旅梯計畫總共巡迴了幾站？是哪幾年？");
+      const question = "旅梯計畫總共巡迴了幾站？是哪幾年？";
+      const parts = await ask(app, question);
 
-      expect(jev.states).toHaveLength(0);
+      expect(jev.states).toHaveLength(1);
+      expect(JSON.stringify(jev.states[0])).toContain(question);
       expect(textOf(parts)).toBe("旅梯計畫巡迴了 5 站。[1]");
+    });
+
+    it("asks which subject is meant when one without a pointing word leaves it unnamed", async () => {
+      const { chat, jev } = installStubModels();
+      jev.noul = 0.5;
+      const app = await startServerWithUpload();
+
+      const parts = await ask(app, "是哪幾年辦的？");
+
+      expect(jev.states).toHaveLength(1);
+      expect(textOf(parts)).toBe(CLARIFY);
+      expect(parts.some((p) => p.type === "data-citation")).toBe(false);
+      expect(chat.prompts).toHaveLength(0);
     });
 
     it("is not checked as a follow-up", async () => {
