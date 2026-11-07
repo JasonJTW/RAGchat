@@ -70,18 +70,14 @@ const ASK_WHICH_SUBJECT_AT = 0.5;
 // Jev answers in ~0.2 s warm, ~0.4 s cold; past this the chat answers as usual.
 const JEV_DEADLINE_MS = 1_500;
 
-// A first question with one of these may point at something it never names.
-const POINTING_WORD = /[它那這其]/;
-
 const CLARIFY = "請問你指的是哪個計畫或主題？";
 
 /**
  * Answers the latest user message from the stored documents, streamed. A
  * follow-up is first rewritten into a standalone question for retrieval; the
- * answer still sees the whole conversation. A first question with a pointing
- * word (它／那／這／其) is checked by Jev for naming its subject, alongside
- * retrieval; when it doesn't, the reply asks which subject is meant instead
- * of answering.
+ * answer still sees the whole conversation. Every first question is checked
+ * by Jev for naming its subject, alongside retrieval; when it doesn't, the
+ * reply asks which subject is meant instead of answering.
  */
 export function streamAnswer(res: Response, messages: ChatMessage[]) {
   const turns = textTurns(messages);
@@ -96,10 +92,7 @@ export function streamAnswer(res: Response, messages: ChatMessage[]) {
       const found = findPassages(turns, question);
       // When the reply asks for the subject, the passages go unread.
       found.catch(() => {});
-      const clarify =
-        !turns.length &&
-        POINTING_WORD.test(question) &&
-        (await leavesSubjectUnnamed(question));
+      const clarify = !turns.length && (await leavesSubjectUnnamed(question));
       writer.write({ type: "start" });
       writer.write({ type: "text-start", id: "answer" });
       if (clarify) {

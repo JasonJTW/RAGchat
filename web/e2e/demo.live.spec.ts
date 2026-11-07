@@ -143,6 +143,7 @@ const MARKDOWN = [
 const OTHERS = ["04-founder-hsiao-yu-chih.pdf", "faq.txt", "pickup-notice.txt"];
 
 const REFUSAL = "這個問題我無法回答";
+const CLARIFY = "請問你指的是哪個計畫或主題？";
 const SUPPORT = "support@megaweaving.example";
 
 // The answer key's normalisation: no thousands separators, dates as
@@ -186,6 +187,8 @@ function expectStreamed(id: string, { firstCharMs, distinctLengths }: Answer) {
 async function expectMatches(entry: Entry, reply: Answer) {
   const { answer, text } = reply;
   note(`${entry.id} answer`, text);
+  // Ticket 13: every first question goes through Jev; none here is asked back.
+  expect(text).not.toBe(CLARIFY);
   for (const fact of entry.contains) {
     const ways = Array.isArray(fact) ? fact : [fact];
     expect(
@@ -221,6 +224,7 @@ async function expectRefuses(id: string, reply: Answer) {
   const { answer, text } = reply;
   note(`${id} answer`, text);
   await answer.screenshot({ path: path.join(EVIDENCE, `${id}.png`) });
+  expect(text).not.toBe(CLARIFY);
   expect(text).toContain(REFUSAL);
   expect(text).toContain(SUPPORT);
   await expect(answer.getByRole("list", { name: "出處" })).toHaveCount(0);
@@ -397,10 +401,26 @@ test.describe("demo script @live", () => {
     );
   });
 
-  // Not Demo Script steps: tickets 06b and 12, run on the same documents.
-  test.describe("a first question with a pronoun", () => {
+  // Not Demo Script steps: tickets 06b, 12 and 13, run on the same documents.
+  test.describe("a first question's subject check", () => {
     test.skip(!hasKey("JEV_API_KEY"), "JEV_API_KEY is not set");
     const EVIDENCE_12 = path.join(EVIDENCE, "../12");
+    const EVIDENCE_13 = path.join(EVIDENCE, "../13");
+
+    test("one without a subject or pronoun, after 新對話, asks which subject is meant", async ({
+      page,
+    }) => {
+      test.setTimeout(300_000);
+      await ask(page, KEY.Q2.question);
+      await page.getByRole("button", { name: "新對話" }).click();
+
+      const { answer, text } = await askFollowUp(page, "是哪幾年辦的？");
+      note("answer", text);
+      await answer.screenshot({ path: path.join(EVIDENCE_13, "1.png") });
+
+      expect(text).toBe(CLARIFY);
+      await expect(answer.getByRole("list", { name: "出處" })).toHaveCount(0);
+    });
 
     test("Q3 after 新對話 asks which subject is meant", async ({ page }) => {
       test.setTimeout(300_000);
@@ -412,7 +432,7 @@ test.describe("demo script @live", () => {
       await answer.screenshot({ path: path.join(EVIDENCE, "06b.png") });
       await answer.screenshot({ path: path.join(EVIDENCE_12, "1.png") });
 
-      expect(text).toBe("請問你指的是哪個計畫或主題？");
+      expect(text).toBe(CLARIFY);
       expect(text).not.toMatch(/2008|2012/);
       await expect(answer.getByRole("list", { name: "出處" })).toHaveCount(0);
     });
@@ -432,13 +452,19 @@ test.describe("demo script @live", () => {
         .locator("summary")
         .allTextContents();
       note("citations", labels.join("\n"));
+      // Both documents state where the project started; either one is a
+      // correct citation.
+      const sources = [
+        "05-projects-and-practice.md › C. 移動微型空間計畫",
+        "03-timeline.md › 社群期",
+      ];
       expect(
         labels.some((label) =>
-          citesMatch(
-            label.replace(/^\[\d+\] /, ""),
-            "05-projects-and-practice.md › C. 移動微型空間計畫",
+          sources.some((source) =>
+            citesMatch(label.replace(/^\[\d+\] /, ""), source),
           ),
         ),
+        `a citation points to ${sources.join("｜")}:\n${labels.join("\n")}`,
       ).toBe(true);
       expectStreamed("那個旅梯計畫", reply);
     });
