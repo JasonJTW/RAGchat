@@ -2,12 +2,11 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { embed as embedOne, embedMany } from "ai";
 import { getEncoding } from "js-tiktoken";
 import { hybridSearch } from "./hybrid-search.js";
 import { chunkDocument } from "./document-chunks.js";
 import type { Chunk } from "./markdown-chunks.js";
-import { EMBEDDING_MODEL } from "./models.js";
+import { embeddings } from "./models.js";
 
 // The document store: uploaded files, their chunks and embeddings, kept in
 // memory and persisted as one JSON file under DATA_DIR (default server/data/).
@@ -95,10 +94,7 @@ export async function retrieve(
     doc.chunks.map((chunk, i) => ({ doc, chunk, i })),
   );
   if (chunks.length === 0) return { passages: [], similarity: 0 };
-  const { embedding } = await embedOne({
-    model: EMBEDDING_MODEL,
-    value: question,
-  });
+  const embedding = await embeddings().embedQuery(question);
   const { ranked, similarity } = hybridSearch(
     chunks.map(({ chunk }) => ({
       text: chunk.embedText,
@@ -167,22 +163,23 @@ export function removeDocument(id: string): boolean {
 
 async function embed(chunks: Chunk[]): Promise<StoredChunk[]> {
   if (chunks.length === 0) return [];
-  const { embeddings } = await embedMany({
-    model: EMBEDDING_MODEL,
-    values: chunks.map((chunk) => chunk.embedText),
-  });
+  const model = embeddings();
+  const vectors = await model.embedDocuments(
+    chunks.map((chunk) => chunk.embedText),
+  );
   return chunks.map((chunk, i) => ({
     ...chunk,
-    embedding: embeddings[i],
-    embeddingModel: EMBEDDING_MODEL,
+    embedding: vectors[i],
+    embeddingModel: model.model,
   }));
 }
 
 // Vectors from different models can't be compared, so a changed
 // EMBEDDING_MODEL re-embeds every chunk at startup.
 async function reembedStaleChunks() {
+  const current = embeddings().model;
   const stale = documents.filter((doc) =>
-    doc.chunks.some((chunk) => chunk.embeddingModel !== EMBEDDING_MODEL),
+    doc.chunks.some((chunk) => chunk.embeddingModel !== current),
   );
   if (stale.length === 0) return;
   for (const doc of stale) doc.chunks = await embed(doc.chunks);

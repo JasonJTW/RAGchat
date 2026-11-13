@@ -1,9 +1,13 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { inject } from "vitest";
 import { installStubModels } from "./src/stub-models.js";
 
 // Every test file gets an empty document store and fake embeddings, so tests
-// never touch server/data/ or the AI Gateway.
+// never touch server/data/ or the AI Gateway. The database is this run's own
+// (vitest.global-setup.ts), shared by every test file: keep tests apart by
+// giving each its own workspace, never by emptying tables.
+process.env.DATABASE_URL = inject("databaseUrl");
 process.env.DATA_DIR = mkdtempSync(path.join(tmpdir(), "kb-server-test-"));
 installStubModels();

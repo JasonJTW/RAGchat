@@ -64,6 +64,7 @@ async function ask(
       (line) =>
         JSON.parse(line.slice("data: ".length)) as {
           type: string;
+          id?: string;
           delta?: string;
           data?: Citation;
         },
@@ -139,7 +140,7 @@ describe("POST /api/chat", () => {
     expect(res.text).not.toMatch(/TypeError|\n\s+at /);
   });
 
-  it("streams the model's answer", async () => {
+  it("streams the model's answer as one text part", async () => {
     const { chat } = installStubModels();
     chat.reply = "旅梯計畫巡迴了 5 站。[1]";
     const app = await startServerWithUpload();
@@ -149,6 +150,9 @@ describe("POST /api/chat", () => {
     const deltas = parts.filter((p) => p.type === "text-delta");
     expect(deltas.length).toBeGreaterThan(1);
     expect(deltas.map((p) => p.delta).join("")).toBe(chat.reply);
+    // A second text part shows as an empty paragraph beside the answer.
+    expect(parts.filter((p) => p.type === "text-start")).toHaveLength(1);
+    expect(new Set(deltas.map((p) => p.id)).size).toBe(1);
   });
 
   it("cites only the passages the answer marks, as numbered in the prompt", async () => {

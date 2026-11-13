@@ -1,14 +1,20 @@
 import type { Response } from "express";
+// The AI SDK only speaks the UI message stream useChat reads; the models are
+// LangChain's (models.ts), their stream converted by @ai-sdk/langchain.
 import {
   createUIMessageStream,
-  generateText,
   pipeUIMessageStreamToResponse,
-  streamText,
   type UIMessageChunk,
 } from "ai";
+import { toUIMessageStream } from "@ai-sdk/langchain";
+import {
+  AIMessage,
+  HumanMessage,
+  SystemMessage,
+} from "@langchain/core/messages";
 import { noul } from "@typesafe-ai/sdk";
 import { retrieve, type Passage } from "./documents.js";
-import { CHAT_MODEL, CHAT_PROVIDER_OPTIONS, SYSTEM_ONE } from "./models.js";
+import { chatModel, SYSTEM_ONE } from "./models.js";
 
 /** A passage an answer cites, as shown under the answer. */
 export interface Citation extends Passage {
@@ -144,25 +150,41 @@ async function* answerParts(
     yield { type: "text-end", id: "answer" };
     return;
   }
-  const result = streamText({
-    model: CHAT_MODEL,
-    system: SYSTEM_PROMPT,
-    providerOptions: CHAT_PROVIDER_OPTIONS,
-    abortSignal,
-    messages: [
-      ...turns,
-      {
-        role: "user",
-        content: `段落：\n\n${passages
+  const stream = await chatModel("answer").stream(
+    [
+      new SystemMessage(SYSTEM_PROMPT),
+      ...turns.map((turn) =>
+        turn.role === "user"
+          ? new HumanMessage(turn.content)
+          : new AIMessage(turn.content),
+      ),
+      new HumanMessage(
+        `段落：\n\n${passages
           .map((p, i) => `[${i + 1}] ${p.label}\n${p.text}`)
           .join("\n\n")}\n\n問題：${question}`,
-      },
+      ),
     ],
-  });
+    { signal: abortSignal },
+  );
   let answer = "";
-  for await (const delta of result.textStream) {
-    answer += delta;
-    yield { type: "text-delta", id: "answer", delta };
+  try {
+    // The adapter's text deltas go into the answer's one text part, opened
+    // before this and closed below; its other parts (e.g. reasoning) pass
+    // through. The outer stream has its own start and finish.
+    for await (const part of toUIMessageStream(stream, {
+      sendStart: false,
+      sendFinish: false,
+    })) {
+      if (part.type === "text-start" || part.type === "text-end") continue;
+      if (part.type === "text-delta") {
+        answer += part.delta;
+        yield { ...part, id: "answer" };
+      } else yield part;
+    }
+  } catch (error) {
+    // The client left mid-answer: nobody reads the rest, and it's no failure.
+    if (abortSignal.aborted) return;
+    throw error;
   }
   yield { type: "text-end", id: "answer" };
   // A refusal cites nothing, even if the model marked a passage.
@@ -215,14 +237,14 @@ async function standaloneQuestion(
   turns: Turn[],
   question: string,
 ): Promise<string> {
-  const { text } = await generateText({
-    model: CHAT_MODEL,
-    system: REWRITE_PROMPT,
-    providerOptions: CHAT_PROVIDER_OPTIONS,
-    prompt: `對話：\n${turns
-      .map((t) => `${t.role === "user" ? "使用者" : "助理"}：${t.content}`)
-      .join("\n")}\n\n最新問題：${question}`,
-  });
+  const { text } = await chatModel("answer").invoke([
+    new SystemMessage(REWRITE_PROMPT),
+    new HumanMessage(
+      `對話：\n${turns
+        .map((t) => `${t.role === "user" ? "使用者" : "助理"}：${t.content}`)
+        .join("\n")}\n\n最新問題：${question}`,
+    ),
+  ]);
   return text.trim() || question;
 }
 

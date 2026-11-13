@@ -2,7 +2,6 @@ import { chmodSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import request from "supertest";
-import { MockEmbeddingModelV4, MockProviderV4 } from "ai/test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installStubModels } from "./stub-models.js";
 
@@ -144,20 +143,19 @@ describe("/api/documents", () => {
 
   it("stores none of the files when embedding one of them fails", async () => {
     const admin = await startServerAsAdmin();
-    const failing = new MockProviderV4();
-    failing.embeddingModel = (modelId: string) =>
-      new MockEmbeddingModelV4({
-        modelId,
-        maxEmbeddingsPerCall: 2048,
-        doEmbed: ({ values }) =>
-          values.some((v) => v.includes("05-projects"))
+    const stubs = globalThis.MODEL_STUBS!;
+    globalThis.MODEL_STUBS = {
+      ...stubs,
+      embeddings: (modelId) => {
+        const model = stubs.embeddings(modelId);
+        const embedDocuments = model.embedDocuments.bind(model);
+        model.embedDocuments = (texts) =>
+          texts.some((text) => text.includes("05-projects"))
             ? Promise.reject(new Error("gateway down"))
-            : Promise.resolve({
-                embeddings: values.map(() => [1, 0]),
-                warnings: [],
-              }),
-      });
-    globalThis.AI_SDK_DEFAULT_PROVIDER = failing;
+            : embedDocuments(texts);
+        return model;
+      },
+    };
 
     const res = await admin
       .post("/api/documents")

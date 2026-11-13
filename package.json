@@ -9,6 +9,8 @@
     "dev": "concurrently -n web,server -c blue,green \"npm run dev -w web\" \"npm run dev -w server\"",
     "dev:web": "npm run dev -w web",
     "dev:server": "npm run dev -w server",
+    "db:up": "docker compose up -d --wait postgres",
+    "db:migrate": "npm run db:migrate -w server",
     "build": "npm run build -w web && npm run build -w server",
     "lint": "npm run lint --workspaces",
     "test": "npm test --workspaces",

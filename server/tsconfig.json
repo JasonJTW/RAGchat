@@ -8,5 +8,11 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src", "vitest.config.ts", "vitest.setup.ts"]
+  "include": [
+    "src",
+    "vitest.config.ts",
+    "vitest.setup.ts",
+    "vitest.global-setup.ts",
+    "drizzle.config.ts"
+  ]
 }

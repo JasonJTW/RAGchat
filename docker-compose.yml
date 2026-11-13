@@ -1,0 +1,26 @@
+# One Postgres (pgvector + pg_trgm) for dev and tests, shared by every worktree:
+# the fixed project name makes each checkout's `docker compose up` reuse the same
+# container instead of starting a second one on the same port. Tests never use
+# the `ragchat` database itself; each test run creates and drops its own.
+name: ragchat
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.1-pg17
+    environment:
+      POSTGRES_USER: ragchat
+      POSTGRES_PASSWORD: ragchat
+      POSTGRES_DB: ragchat
+    ports:
+      # Bound to localhost only. 5433 stays clear of a Postgres installed on the host.
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ragchat -d ragchat"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  postgres:

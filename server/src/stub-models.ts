@@ -1,9 +1,11 @@
+import { Embeddings } from "@langchain/core/embeddings";
+import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import {
-  MockEmbeddingModelV4,
-  MockLanguageModelV4,
-  MockProviderV4,
-} from "ai/test";
-import { simulateReadableStream } from "ai";
+  AIMessage,
+  AIMessageChunk,
+  type BaseMessage,
+} from "@langchain/core/messages";
+import { ChatGenerationChunk, type ChatResult } from "@langchain/core/outputs";
 import type { SystemOne } from "./models.js";
 
 /** The fake chat model's next reply and the prompts it was sent. */
@@ -36,9 +38,10 @@ export const STUB_CHAT_REPLY = "這是假模型的回答，依據第 1 段。[1]
 export const STUB_CHAT_REWRITE = "旅梯計畫總共巡迴了幾站？是哪幾年？";
 
 /**
- * Replaces the AI Gateway and Jev with fakes, without a network call: any
+ * Replaces the models (models.ts) and Jev with fakes, without a network call: any
  * embedding model id returns fixed vectors derived from the text and the id,
- * any chat model id streams `chat.reply` and returns `chat.rewrite` whole, and
+ * any chat model id streams `chat.reply` and, when invoked, returns
+ * `chat.rewrite` whole, and
  * Jev answers every Noul with `jev.noul`. Returns the texts each embedding
  * model id was asked to embed, the chat and Jev stubs, and `vectors`: fixed
  * embeddings for given texts, overriding the derived ones.
@@ -57,62 +60,10 @@ export function installStubModels(): {
     rewritePrompts: [],
   };
   const vectors = new Map<string, number[]>();
-  const provider = new MockProviderV4();
-  provider.embeddingModel = (modelId: string) =>
-    new MockEmbeddingModelV4({
-      modelId,
-      maxEmbeddingsPerCall: 2048,
-      doEmbed: ({ values }) => {
-        (embedded[modelId] ??= []).push(...values);
-        return Promise.resolve({
-          embeddings: values.map(
-            (text) => vectors.get(text) ?? stubVector(modelId, text),
-          ),
-          warnings: [],
-        });
-      },
-    });
-  provider.languageModel = (modelId: string) =>
-    new MockLanguageModelV4({
-      modelId,
-      doGenerate: ({ prompt }) => {
-        chat.rewritePrompts.push(flatten(prompt));
-        return Promise.resolve({
-          content: [
-            {
-              type: "text" as const,
-              text: chat.rewrite,
-            },
-          ],
-          finishReason: { unified: "stop" as const, raw: undefined },
-          usage: NO_USAGE,
-          warnings: [],
-        });
-      },
-      doStream: ({ prompt }) => {
-        chat.prompts.push(flatten(prompt));
-        return Promise.resolve({
-          stream: simulateReadableStream({
-            chunkDelayInMs: 10,
-            chunks: [
-              { type: "text-start" as const, id: "1" },
-              ...Array.from(chat.reply, (delta) => ({
-                type: "text-delta" as const,
-                id: "1",
-                delta,
-              })),
-              { type: "text-end" as const, id: "1" },
-              {
-                type: "finish" as const,
-                finishReason: { unified: "stop" as const, raw: undefined },
-                usage: NO_USAGE,
-              },
-            ],
-          }),
-        });
-      },
-    });
-  globalThis.AI_SDK_DEFAULT_PROVIDER = provider;
+  globalThis.MODEL_STUBS = {
+    chat: (modelId) => new StubChatModel(modelId, chat),
+    embeddings: (modelId) => new StubEmbeddings(modelId, embedded, vectors),
+  };
   const jev: StubJev = { noul: 0, states: [] };
   const fakeJev = {
     systemOne(
@@ -146,24 +97,70 @@ export function installStubModels(): {
   return { embedded, chat, jev, vectors };
 }
 
-const NO_USAGE = {
-  inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
-  outputTokens: { total: 0, text: 0, reasoning: 0 },
-};
+// A chat model that streams `chat.reply` one character every 10 ms, and
+// answers an invoke with `chat.rewrite`.
+class StubChatModel extends BaseChatModel {
+  constructor(
+    readonly model: string,
+    private readonly chat: StubChat,
+  ) {
+    super({});
+  }
+
+  _llmType() {
+    return "stub";
+  }
+
+  _generate(messages: BaseMessage[]): Promise<ChatResult> {
+    this.chat.rewritePrompts.push(flatten(messages));
+    const text = this.chat.rewrite;
+    return Promise.resolve({
+      generations: [{ text, message: new AIMessage(text) }],
+    });
+  }
+
+  async *_streamResponseChunks(
+    messages: BaseMessage[],
+  ): AsyncGenerator<ChatGenerationChunk> {
+    this.chat.prompts.push(flatten(messages));
+    for (const delta of this.chat.reply) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      yield new ChatGenerationChunk({
+        text: delta,
+        message: new AIMessageChunk(delta),
+      });
+    }
+  }
+}
+
+// Embeddings derived from the text and the model id, or taken from `vectors`.
+class StubEmbeddings extends Embeddings {
+  constructor(
+    readonly model: string,
+    private readonly embedded: Record<string, string[]>,
+    private readonly vectors: Map<string, number[]>,
+  ) {
+    super({});
+  }
+
+  embedDocuments(texts: string[]): Promise<number[][]> {
+    (this.embedded[this.model] ??= []).push(...texts);
+    return Promise.resolve(
+      texts.map(
+        (text) => this.vectors.get(text) ?? stubVector(this.model, text),
+      ),
+    );
+  }
+
+  async embedQuery(text: string): Promise<number[]> {
+    const [vector] = await this.embedDocuments([text]);
+    return vector;
+  }
+}
 
 // The system prompt, then each message, as text.
-function flatten(
-  prompt: { content: string | { type: string; text?: string }[] }[],
-): string {
-  return prompt
-    .map((message) =>
-      typeof message.content === "string"
-        ? message.content
-        : message.content
-            .map((part) => (part.type === "text" ? (part.text ?? "") : ""))
-            .join(""),
-    )
-    .join("\n\n");
+function flatten(messages: BaseMessage[]): string {
+  return messages.map((message) => message.text).join("\n\n");
 }
 
 // Hashes character bigrams into 64 buckets, so texts sharing words point the

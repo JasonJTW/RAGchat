@@ -3,6 +3,8 @@
 - `npm run dev`: web :3000 + server :4000
 - `npm test`: Vitest in every workspace (`npm test -w web` / `-w server` for one)
 - `npm run test:e2e`: Playwright against `web` (starts `next dev` itself)
+- Postgres (pgvector + pg_trgm, ADR-0001): `npm run db:up` starts the one `docker compose` service every worktree shares (project name `ragchat`, host port `POSTGRES_PORT`, default 5433); `npm run db:migrate` applies migrations to `DATABASE_URL`. Schema in `server/src/db/schema.ts`; after changing it run `npm run db:generate -w server` and commit `server/drizzle/`.
+- Server tests use real Postgres: each `npm test -w server` run creates its own `ragchat_test_<random>` database on the server `DATABASE_URL` names (shell, then root `.env`, else the compose default), migrates it, and drops it at the end, so worktrees run tests in parallel safely. A local run starts the compose service if it is down; CI uses a service container. All test files in one run share that database: isolate tests by creating a workspace per test, never by truncating tables.
 - `npm run lint`, `npm run typecheck`: every workspace (ESLint + `tsc`)
 - `npm run format`: Prettier
 - `npm run setup:repo`: apply the GitHub repo settings (auto-merge on, delete branch on merge) and the `scripts/main-ruleset.json` ruleset (needs admin `gh`). **Run once after creating a repo from this starter.**
@@ -15,6 +17,7 @@
 
 - Tests sit next to the code as `*.test.ts(x)`. Server tests import `app` from `server/src/app.ts` and hit it with supertest; `server/src/index.ts` only calls `listen`.
 - E2E specs live in `web/e2e/*.spec.ts`; Vitest ignores that folder.
+- The server calls models only through `server/src/models.ts` (`chatModel(purpose)`, `embeddings()`; LangChain, ADR-0002). Tests get fakes from `installStubModels()` (`server/src/stub-models.ts`), installed for every server test file and by `STUB_MODELS=1`.
 - The pre-commit hook (`lefthook.yml`) formats and lints staged files, then runs `npm run typecheck` and `npm test`. The pre-push hook refuses pushes to `main`, then runs `npm run test:e2e`. Changes reach `main` through a PR: CI and the Claude reviews are required checks, enforced by the `main` ruleset. The ruleset and merge settings are GitHub settings, not git content, so they are absent in every new clone or template copy until `npm run setup:repo` runs. Without it nothing blocks a merge. If you add or rename a required job, update `scripts/main-ruleset.json` and re-run it. Fix failures; never bypass either hook with `--no-verify`.
 - After opening a PR, enable auto-merge: `gh pr merge --auto --merge <PR>`. GitHub then merges it once the required checks pass. Skip this for draft PRs, or when the user says to hold the merge.
 - If auto-merge stalls on a failing check, fix the failure and push. Never merge manually past a red check.
@@ -61,4 +64,4 @@ Single-context: one root `GLOSSARY.md` + `docs/adr/`. See `docs/agents/domain.md
 - Start: `npm run dev` (chat `localhost:3000/`, admin `localhost:3000/admin`; Next rewrites `/api/*` to the server on :4000).
 - Full suite: `npm run lint && npm run typecheck && npm test && npm run test:e2e` (no LLM calls; `@live` tests excluded). E2E starts its own web :3100 + server :4100, never touching a running `npm run dev`.
 - Live tests: `npm run test:live` (Playwright `@live` tests against the real LLM; needs `AI_GATEWAY_API_KEY`).
-- Env (root `.env`, see `.env.example`): `AI_GATEWAY_API_KEY`, `JEV_API_KEY` (Jev subject check; optional, live tests need it), `CHAT_MODEL` (e.g. `openai/gpt-5-mini`), `EMBEDDING_MODEL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`; server reads `DATA_DIR` (default `server/data/`); web reads `SERVER_URL` (default `http://localhost:4000`).
+- Env (root `.env`, see `.env.example`): `AI_GATEWAY_API_KEY`, `JEV_API_KEY` (Jev subject check; optional, live tests need it), `CHAT_MODEL` (e.g. `openai/gpt-5-mini`), `EXTRACT_MODEL`/`GUEST_MODEL` (optional, default `CHAT_MODEL`), `EMBEDDING_MODEL`, `DATABASE_URL`/`POSTGRES_PORT` (optional), `ADMIN_USERNAME`, `ADMIN_PASSWORD`; server reads `DATA_DIR` (default `server/data/`); web reads `SERVER_URL` (default `http://localhost:4000`).
