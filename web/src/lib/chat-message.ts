@@ -33,9 +33,14 @@ export interface HistoryEntry {
 /** A 提案 as the chat shows it on its card (server/openapi.yaml's Proposal). */
 export interface Proposal {
   id: string;
-  status: "pending" | "confirmed" | "rejected";
+  /** expired: a newer proposal's confirmation expired every item. */
+  status: "pending" | "confirmed" | "rejected" | "expired";
   createdBy: string;
   createdAt: string;
+  /** Who confirmed or rejected it. */
+  decidedBy?: string;
+  /** While pending: older pending items that confirming it would expire. */
+  expires?: ExpiringItem[];
   /** 取代 and 過時 items first, then 新增 ones. */
   items: {
     id: string;
@@ -49,7 +54,35 @@ export interface Proposal {
     reason?: string;
     /** When the change takes effect (取代, 過時). */
     effectiveAt?: string;
+    /** The newer proposal whose confirmation expired it (已過期). */
+    expiredBy?: string;
   }[];
+}
+
+/** A pending item of an older 提案 that confirming a newer one expires. */
+export interface ExpiringItem {
+  proposalId: string;
+  itemId: string;
+  kind: "add" | "supersede" | "obsolete";
+  /** Its fact, or for 過時 the fact it would end. */
+  content: string;
+  createdBy: string;
+}
+
+/**
+ * A change confirmed since a 提案 was made that touches one of its items;
+ * confirming is stopped until the member has seen it (409 from confirm).
+ */
+export interface Conflict {
+  itemId: string;
+  changeId: string;
+  kind: "add" | "supersede" | "obsolete";
+  /** The fact it replaced or marked 過時. */
+  before?: string;
+  /** The fact it added. */
+  after?: string;
+  decidedBy: string;
+  decidedAt: string;
 }
 
 /** A fact a 成員 edited inline: who, and the text as extracted. */

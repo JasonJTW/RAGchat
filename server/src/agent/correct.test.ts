@@ -381,4 +381,53 @@ describe("proposeCorrection", () => {
     expect(text).toContain("另有 1 則待確認提案也在修改這則事實");
     expect(written.some((c) => c.type === "data-proposal")).toBe(true);
   });
+
+  it("tells which older pending items its confirmation would expire", async () => {
+    const [id] = await known("R 代表取代率");
+    const [target] = await currentFacts(workspaceId, [id]);
+    const earlier = await proposeFacts(workspaceId, "member-c", {
+      source: { kind: "message", content: "過時" },
+      facts: [],
+      corrections: [
+        {
+          kind: "obsolete",
+          targetFactId: id,
+          reason: "過時",
+          effectiveAt: new Date().toISOString(),
+        },
+      ],
+    });
+    const written: { type: string; delta?: string }[] = [];
+
+    const { proposal } = await proposeCorrection(
+      {
+        workspaceId,
+        userId: "member-b",
+        message: "R 不是取代率，是回收率",
+        drafts: [
+          {
+            kind: "supersede",
+            target,
+            content: "R 代表回收率",
+            reason: "更正",
+            effectiveAt: new Date().toISOString(),
+          },
+        ],
+        conflicts: [],
+      },
+      { writer: (chunk) => written.push(chunk) },
+    );
+
+    expect(proposal?.expires).toEqual([
+      expect.objectContaining({
+        proposalId: earlier.id,
+        itemId: earlier.items[0].id,
+        kind: "obsolete",
+        content: "R 代表取代率",
+      }),
+    ]);
+    expect(written.map((c) => c.delta ?? "").join("")).toContain(
+      "確認後會讓 1 項較早的待確認項目過期",
+    );
+  });
 });

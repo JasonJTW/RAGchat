@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { searchFacts } from "../knowledge-base.js";
+import { propose as proposeFacts, searchFacts } from "../knowledge-base.js";
 import { installStubModels } from "../stub-models.js";
 import { createWorkspace } from "../workspaces.js";
 import { extract, propose } from "./input.js";
@@ -85,5 +85,33 @@ describe("propose", () => {
 
     expect(out.proposal).toBeUndefined();
     expect(written.map((c) => c.delta ?? "").join("")).toContain("沒有");
+  });
+
+  it("tells which older pending items its confirmation would expire, as making the same claim", async () => {
+    installStubModels();
+    const workspaceId = await createWorkspace("guest", "test");
+    const older = await proposeFacts(workspaceId, "user-b", {
+      source: { kind: "message", content: FACT },
+      facts: [FACT, "M 代表質量，單位是公斤，由物資登記時填寫"],
+    });
+    const written: { type: string; delta?: string }[] = [];
+
+    const out = await propose(
+      { workspaceId, userId: "user-a", message: MESSAGE, extracted: [FACT] },
+      { writer: (chunk) => written.push(chunk) },
+    );
+
+    expect(out.proposal?.expires).toEqual([
+      {
+        proposalId: older.id,
+        itemId: older.items[0].id,
+        kind: "add",
+        content: FACT,
+        createdBy: "user-b",
+      },
+    ]);
+    expect(written.map((c) => c.delta ?? "").join("")).toContain(
+      "確認後會讓 1 項較早的待確認項目過期",
+    );
   });
 });

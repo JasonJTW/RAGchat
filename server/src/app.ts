@@ -18,8 +18,10 @@ import {
 import {
   confirmProposal,
   type DecisionError,
+  pendingProposals,
   type Proposal,
   rejectProposal,
+  type Stopped,
 } from "./knowledge-base.js";
 import { callerOf, type Caller } from "./workspaces.js";
 
@@ -102,14 +104,19 @@ app.post("/api/chat", async (req, res) => {
   await streamReply(res, callerIn(res), body.data.messages);
 });
 
+app.get("/api/proposals", async (_req, res) => {
+  res.json(await pendingProposals(callerIn(res).workspaceId));
+});
+
 const confirmBody = z
   .object({
     edits: z
       .array(z.object({ itemId: z.string(), content: z.string().max(2000) }))
       .max(100)
       .default([]),
+    acknowledged: z.array(z.string().max(100)).max(500).default([]),
   })
-  .default({ edits: [] });
+  .default({ edits: [], acknowledged: [] });
 
 // Confirming is the one way facts enter the knowledge base; no model is
 // involved (ADR-0003).
@@ -122,7 +129,13 @@ app.post("/api/proposals/:id/confirm", async (req, res) => {
   const { workspaceId, userId } = callerIn(res);
   sendDecision(
     res,
-    await confirmProposal(workspaceId, req.params.id, userId, body.data.edits),
+    await confirmProposal(
+      workspaceId,
+      req.params.id,
+      userId,
+      body.data.edits,
+      body.data.acknowledged,
+    ),
   );
 });
 
@@ -134,8 +147,17 @@ app.post("/api/proposals/:id/reject", async (req, res) => {
 const INVALID_EDIT =
   "edits must name items of this proposal, each with a text of 1 to 2000 characters";
 
-function sendDecision(res: express.Response, result: Proposal | DecisionError) {
-  if (result === "not found") {
+function sendDecision(
+  res: express.Response,
+  result: Proposal | DecisionError | Stopped,
+) {
+  if (typeof result === "object" && "conflicts" in result) {
+    res.status(409).json({
+      error:
+        "the knowledge base changed since this proposal was made; confirm again acknowledging the changes, or reject it",
+      conflicts: result.conflicts,
+    });
+  } else if (result === "not found") {
     res.status(404).json({ error: "proposal not found" });
   } else if (result === "already decided") {
     res

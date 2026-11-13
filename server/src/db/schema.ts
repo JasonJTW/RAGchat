@@ -107,10 +107,12 @@ export const facts = pgTable(
   ],
 );
 
+/** A proposal is 已過期 once every item of it expired. */
 export const proposalStatus = pgEnum("proposal_status", [
   "pending",
   "confirmed",
   "rejected",
+  "expired",
 ]);
 
 /** 提案: changes to the knowledge base that wait for a member to confirm them. */
@@ -158,4 +160,11 @@ export const proposalItems = pgTable("proposal_items", {
    * replacement's `valid_from` once confirmed.
    */
   effectiveAt: timestamp("effective_at", { withTimezone: true }),
+  /**
+   * The newer proposal whose confirmation expired this pending item, as
+   * making the same claim (已過期); null while it can still be confirmed.
+   */
+  expiredBy: uuid("expired_by").references((): AnyPgColumn => proposals.id, {
+    onDelete: "set null",
+  }),
 });
