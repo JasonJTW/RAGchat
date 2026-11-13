@@ -1,17 +1,7 @@
 # .scratch
 
-Local issue tracker: specs and tickets live here as markdown. See `docs/agents/issue-tracker.md` for the full rules.
+Working files for in-flight features: fixtures, answer keys, prototype reports. Specs and tickets live in GitHub Issues, not here (see `docs/agents/issue-tracker.md`).
 
-```
-.scratch/
-└── <feature-slug>/
-    ├── spec.md              ← what to build and why (written by /to-spec)
-    ├── map.md               ← open questions for a larger effort (/wayfinder)
-    └── issues/
-        ├── 01-<slug>.md     ← one ticket per file (written by /to-tickets)
-        └── 02-<slug>.md
-```
-
-- Each ticket has a `Status:` line near the top using the labels in `docs/agents/triage-labels.md`.
-- Conversation history goes at the bottom of the file under `## Comments`.
+- One folder per feature: `.scratch/<feature-slug>/`.
+- `kb-chatbot/` predates the move to GitHub Issues and keeps its old local spec and tickets as history.
 - Delete or archive a feature folder once it ships; the code and ADRs are the lasting record.

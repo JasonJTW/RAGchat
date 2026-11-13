@@ -45,7 +45,7 @@ Designing or refactoring module boundaries → use the `codebase-design` skill.
 
 ### Issue tracker
 
-Issues live as local markdown files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+Issues and specs live in GitHub Issues (`JasonJTW/RAGchat`, via `gh`). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
