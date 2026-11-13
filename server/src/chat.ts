@@ -29,6 +29,11 @@ export function streamReply(
 ) {
   const turns = textTurns(messages);
   const message = turns.at(-1)?.role === "user" ? turns.pop()!.content : "";
+  const latest = messages.at(-1);
+  const attachments =
+    latest?.role === "user"
+      ? latest.parts.filter((part) => part.type === "file").length
+      : 0;
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
       const abort = new AbortController();
@@ -37,7 +42,7 @@ export function streamReply(
       writer.write({ type: "start" });
       try {
         for await (const chunk of await agent.stream(
-          { ...caller, turns, message },
+          { ...caller, turns, message, attachments },
           { streamMode: "custom", signal: abort.signal },
         ))
           writer.write(chunk as UIMessageChunk);

@@ -40,21 +40,23 @@ paths:
         When earlier messages are sent, the latest one is first rewritten
         into a standalone question for retrieval, and the answer sees the
         whole conversation. The conversation lives only in the client.
-        When the latest message is the only one and contains 它, 那, 這 or
-        其, the chat model is asked whether it names its subject, while the
-        answer is prepared alongside and held back. If it does not, the
-        answer is dropped and the reply is the fixed sentence
-        「請問你指的是哪個計畫或主題？」 with no citations; otherwise the
-        held answer is streamed as usual.
+        When the latest message is the only one, Jev (TypeSafe) is asked,
+        within 1.5 s and while retrieval runs alongside, whether it points at
+        a subject it never names. If it does, the reply is the fixed sentence
+        「請問你指的是哪個計畫或主題？」 with no citations; on a Jev failure,
+        timeout or no JEV_API_KEY the question is answered as usual. The
+        check is skipped, by rule, for a message with a `file` part and for
+        one with an input keyword (輸入, 記下, 記錄, 記住, 寫入, 存入, 存進,
+        新增, 加入, 更新, 補充, 更正, 修正, 改成, 改為).
         Streams the answer as an AI SDK UI message stream (Server-Sent Events).
         After the text, each passage the answer marks with `[n]` arrives as a
         `data-citation` part in the same stream, with `data` shaped like
         Citation. Passages the answer doesn't mark are not sent.
         When no fact or stored chunk is similar enough to the question (best cosine
         similarity below 0.3), or the passages don't answer it, the answer is
-        the fixed refusal 「這個問題我無法回答，請來信客服
-        support@megaweaving.example。」 with no citations; below the
-        similarity threshold the model is not called.
+        the fixed refusal 「知識庫裡沒有這件事的資料。如果你知道，可以直接告訴我，
+        我會整理成提案請團隊確認。」 with no citations; below the similarity
+        threshold the model is not called.
       requestBody:
         required: true
         content:
@@ -87,6 +89,11 @@ paths:
                               description: >
                                 At most 2000 characters in a user message,
                                 20000 in other messages
+                        description: >
+                          `text` parts are read as the message. A `file` part
+                          (AI SDK FilePart) in the latest user message marks
+                          it as carrying an attachment; its content is not
+                          read yet.
       responses:
         "200":
           description: UI message stream
