@@ -6,7 +6,7 @@ import {
 } from "@langchain/core/messages";
 import { noul } from "@typesafe-ai/sdk";
 import { retrieve as retrievePassages } from "../documents.js";
-import { searchFacts } from "../knowledge-base.js";
+import { type Edited, searchFacts } from "../knowledge-base.js";
 import { chatModel, SYSTEM_ONE } from "../models.js";
 import { type NodeConfig, type State, type Turn, writeText } from "./state.js";
 
@@ -20,6 +20,8 @@ export interface Evidence {
   label: string;
   /** The fact, or the passage's original text. */
   text: string;
+  /** Present when a member edited the fact's text inline (經編輯). */
+  edited?: Edited;
   /** A fact's source as given, shown when its citation is expanded. */
   source?: { content: string; createdAt: string };
 }
@@ -130,6 +132,7 @@ export async function retrieve(
         kind: "fact",
         label: `知識庫 · ${TEAM_DATE.format(new Date(fact.validFrom))}`,
         text: fact.content,
+        ...(fact.edited && { edited: fact.edited }),
         source: {
           content: fact.source.content,
           createdAt: fact.source.createdAt,

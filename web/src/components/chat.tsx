@@ -98,6 +98,16 @@ function Citations({ message }: { message: ChatMessage }) {
               [{citation.marker}] {citation.label}
             </summary>
             <p className="mt-1 whitespace-pre-wrap">{citation.text}</p>
+            {citation.edited && (
+              <figure className="mt-1">
+                <figcaption className="text-xs">
+                  經 {citation.edited.by} 編輯，原始抽取：
+                </figcaption>
+                <blockquote className="border-l-2 pl-2 whitespace-pre-wrap">
+                  {citation.edited.originalContent}
+                </blockquote>
+              </figure>
+            )}
             {citation.source && (
               <figure className="mt-1">
                 <figcaption className="text-xs">來源原文</figcaption>
