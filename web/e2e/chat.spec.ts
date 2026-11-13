@@ -73,8 +73,11 @@ test("新對話 clears the conversation", async ({ page }) => {
   await page.getByRole("button", { name: "新對話" }).click();
 
   await expect(page.getByRole("article", { name: "回答" })).toHaveCount(0);
+  // Only the conversation list still names it.
   await expect(
-    page.getByText("旅梯計畫總共巡迴了幾站？是哪幾年？"),
+    page
+      .getByRole("main")
+      .locator("p", { hasText: "旅梯計畫總共巡迴了幾站？是哪幾年？" }),
   ).toHaveCount(0);
   await page.screenshot({ path: test.info().outputPath("cleared.png") });
 });
