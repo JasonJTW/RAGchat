@@ -6,7 +6,11 @@ import {
 } from "@langchain/core/messages";
 import { noul } from "@typesafe-ai/sdk";
 import { retrieve as retrievePassages } from "../documents.js";
-import { type Edited, searchFacts } from "../knowledge-base.js";
+import {
+  type Edited,
+  type HistoryEntry,
+  searchFacts,
+} from "../knowledge-base.js";
 import { chatModel, systemOne } from "../models.js";
 import { type NodeConfig, type State, type Turn, writeText } from "./state.js";
 
@@ -24,6 +28,8 @@ export interface Evidence {
   edited?: Edited;
   /** A fact's source as given, shown when its citation is expanded. */
   source?: { content: string; createdAt: string };
+  /** A fact's history chain, oldest first, when it replaced another. */
+  history?: HistoryEntry[];
 }
 
 /** Evidence an answer cites, as shown under the answer. */
@@ -145,6 +151,7 @@ export async function retrieve(
         label: `知識庫 · ${TEAM_DATE.format(new Date(fact.validFrom))}`,
         text: fact.content,
         ...(fact.edited && { edited: fact.edited }),
+        ...(fact.history && { history: fact.history }),
         source: {
           content: fact.source.content,
           createdAt: fact.source.createdAt,
