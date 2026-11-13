@@ -150,8 +150,9 @@ function effectiveAt(date: string | null, target: Fact, now: Date): string {
  * change to a fact no longer current (replaced or 過時 since it was located)
  * and a 取代 that leaves the text as it is are dropped. Other pending
  * proposals that already change a target are listed as conflicts, for the
- * reply to point out; both may still be confirmed, and the first confirmed
- * wins (the other is refused at confirm, see knowledge-base.ts).
+ * reply to point out. Confirming the new proposal expires the older ones'
+ * items; confirming an older one first stops the new one at confirm with
+ * the change shown (see knowledge-base.ts `confirmProposal`).
  */
 export async function compareConflicts(
   state: Pick<State, "workspaceId" | "drafts">,
@@ -200,13 +201,14 @@ export async function proposeCorrection(
     })),
   });
   const rivals = new Set(state.conflicts.map((c) => c.proposalId)).size;
+  const expiring = proposal.expires?.length ?? 0;
   writeText(
     config,
     "reply",
     `我整理出 ${proposal.items.length} 項修正，確認後才會改動知識庫` +
-      (rivals
-        ? `。注意：另有 ${rivals} 則待確認提案也在修改這則事實，先確認的才會生效：`
-        : "："),
+      (rivals ? `。注意：另有 ${rivals} 則待確認提案也在修改這則事實` : "") +
+      (expiring ? `；確認後會讓 ${expiring} 項較早的待確認項目過期` : "") +
+      "：",
   );
   config.writer?.({ type: "data-proposal", id: proposal.id, data: proposal });
   return { proposal };

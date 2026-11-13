@@ -268,7 +268,10 @@ export async function propose(
     writeText(
       config,
       id,
-      `${name}我整理出 ${proposal.items.length} 則事實，確認後才會寫入知識庫：`,
+      `${name}我整理出 ${proposal.items.length} 則事實，確認後才會寫入知識庫` +
+        (proposal.expires?.length
+          ? `；確認後會讓 ${proposal.expires.length} 項較早的待確認項目過期，因為它們談的是同一件事：`
+          : "："),
     );
     config.writer?.({ type: "data-proposal", id: proposal.id, data: proposal });
   }

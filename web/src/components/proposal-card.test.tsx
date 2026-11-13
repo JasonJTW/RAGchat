@@ -86,6 +86,7 @@ it("confirms only the ticked items, and shows the unticked ones as left out", as
   expect(JSON.parse(init.body as string)).toEqual({
     edits: [],
     excluded: ["item-3", "item-7"],
+    acknowledged: [],
   });
   const leftOut = screen
     .getAllByRole("listitem", { hidden: true })

@@ -1,5 +1,5 @@
 {
-  "id": "f9e41a0b-710c-4760-9b68-46dfc22c2fc8",
+  "id": "56006b24-aaa2-4017-9bc6-0b44f9351ec1",
   "prevId": "88d24f55-6c68-4a83-ad71-68dd46d9d84c",
   "version": "7",
   "dialect": "postgresql",
@@ -121,12 +121,6 @@
           "type": "uuid",
           "primaryKey": false,
           "notNull": true
-        },
-        "chunk_id": {
-          "name": "chunk_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
         },
         "content": {
           "name": "content",
@@ -276,15 +270,6 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "facts_chunk_id_source_chunks_id_fk": {
-          "name": "facts_chunk_id_source_chunks_id_fk",
-          "tableFrom": "facts",
-          "tableTo": "source_chunks",
-          "columnsFrom": ["chunk_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
         "facts_superseded_by_facts_id_fk": {
           "name": "facts_superseded_by_facts_id_fk",
           "tableFrom": "facts",
@@ -362,12 +347,11 @@
           "primaryKey": false,
           "notNull": false
         },
-        "excluded": {
-          "name": "excluded",
-          "type": "boolean",
+        "expired_by": {
+          "name": "expired_by",
+          "type": "uuid",
           "primaryKey": false,
-          "notNull": true,
-          "default": false
+          "notNull": false
         }
       },
       "indexes": {},
@@ -406,6 +390,15 @@
           "columnsFrom": ["target_fact_id"],
           "columnsTo": ["id"],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "proposal_items_expired_by_proposals_id_fk": {
+          "name": "proposal_items_expired_by_proposals_id_fk",
+          "tableFrom": "proposal_items",
+          "tableTo": "proposals",
+          "columnsFrom": ["expired_by"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -499,141 +492,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.source_chunks": {
-      "name": "source_chunks",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "workspace_id": {
-          "name": "workspace_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "source_id": {
-          "name": "source_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "position": {
-          "name": "position",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "path": {
-          "name": "path",
-          "type": "text[]",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "content": {
-          "name": "content",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "embedding": {
-          "name": "embedding",
-          "type": "vector(1536)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "embedding_model": {
-          "name": "embedding_model",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "source_chunks_source": {
-          "name": "source_chunks_source",
-          "columns": [
-            {
-              "expression": "source_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "position",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "source_chunks_embedding": {
-          "name": "source_chunks_embedding",
-          "columns": [
-            {
-              "expression": "embedding",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last",
-              "opclass": "vector_cosine_ops"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "hnsw",
-          "with": {}
-        },
-        "source_chunks_content_trgm": {
-          "name": "source_chunks_content_trgm",
-          "columns": [
-            {
-              "expression": "content",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last",
-              "opclass": "gin_trgm_ops"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "gin",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "source_chunks_workspace_id_workspaces_id_fk": {
-          "name": "source_chunks_workspace_id_workspaces_id_fk",
-          "tableFrom": "source_chunks",
-          "tableTo": "workspaces",
-          "columnsFrom": ["workspace_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "source_chunks_source_id_sources_id_fk": {
-          "name": "source_chunks_source_id_sources_id_fk",
-          "tableFrom": "source_chunks",
-          "tableTo": "sources",
-          "columnsFrom": ["source_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.sources": {
       "name": "sources",
       "schema": "",
@@ -657,12 +515,6 @@
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
-        },
-        "filename": {
-          "name": "filename",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         },
         "content": {
           "name": "content",
@@ -757,7 +609,7 @@
     "public.proposal_status": {
       "name": "proposal_status",
       "schema": "public",
-      "values": ["pending", "confirmed", "rejected"]
+      "values": ["pending", "confirmed", "rejected", "expired"]
     },
     "public.source_kind": {
       "name": "source_kind",

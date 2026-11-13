@@ -31,7 +31,9 @@ for (const file of FORMATS) {
     await expect(reply).toContainText(`${name}：我整理出`);
     const card = reply.getByRole("region", { name: "提案" });
     await expect(card).toHaveCount(1);
-    await expect(card.getByRole("heading")).toHaveText(/^提案 · 新增 \d+ 項$/);
+    await expect(card.getByRole("heading")).toHaveText(
+      /^提案 · 新增 \d+ 項.* 提出$/,
+    );
     await expect(card.getByRole("button", { name: "確認" })).toBeEnabled();
     await page.screenshot({ path: test.info().outputPath(`${name}.png`) });
   });
@@ -111,18 +113,17 @@ test("a card of over 30 items folds them, and confirms only the ticked ones", as
   const card = reply.getByRole("region", { name: "提案" });
   await expect(card.getByRole("heading")).toContainText(/新增 3\d 項/);
   const adds = card.locator("details").filter({ hasText: /^新增（3\d 項）/ });
+  // The card's items, not its list of older pending items it would expire.
+  const items = adds.getByRole("listitem");
   // Folded: the items are hidden until the group is opened.
-  await expect(card.getByRole("listitem")).toHaveCount(0);
+  await expect(items).toHaveCount(0);
   await adds.locator("summary").click();
-  const total = await card.getByRole("listitem").count();
+  const total = await items.count();
   expect(total).toBeGreaterThan(30);
 
-  const dropped = card
-    .getByRole("listitem")
-    .filter({ hasText: "倉庫第 2 區存放第 2 類物資" });
+  const dropped = items.filter({ hasText: "倉庫第 2 區存放第 2 類物資" });
   await dropped.getByRole("checkbox", { name: "納入" }).uncheck();
-  await card
-    .getByRole("listitem")
+  await items
     .filter({ hasText: "倉庫第 5 區存放第 5 類物資" })
     .getByRole("checkbox", { name: "納入" })
     .uncheck();
@@ -132,9 +133,7 @@ test("a card of over 30 items folds them, and confirms only the ticked ones", as
     .click();
 
   await expect(card).toContainText("已確認");
-  await expect(
-    card.getByRole("listitem").filter({ hasText: "未納入" }),
-  ).toHaveCount(2);
+  await expect(items.filter({ hasText: "未納入" })).toHaveCount(2);
   await expect(dropped).toContainText("未納入");
   await page.screenshot({ path: test.info().outputPath("confirmed-some.png") });
 });

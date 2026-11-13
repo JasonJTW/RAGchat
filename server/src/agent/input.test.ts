@@ -1,7 +1,11 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { searchChunks, searchFacts } from "../knowledge-base.js";
+import {
+  propose as proposeFacts,
+  searchChunks,
+  searchFacts,
+} from "../knowledge-base.js";
 import { installStubModels } from "../stub-models.js";
 import { createWorkspace } from "../workspaces.js";
 import { chunk, extract, propose, toText } from "./input.js";
@@ -325,6 +329,44 @@ describe("propose", () => {
     expect(out.proposals).toEqual([]);
     expect(written.map((c) => c.delta ?? "").join("")).toBe(
       "不支援的檔案格式：a.xlsx",
+    );
+  });
+
+  it("tells which older pending items its confirmation would expire, as making the same claim", async () => {
+    installStubModels();
+    const workspaceId = await createWorkspace("guest", "test");
+    const older = await proposeFacts(workspaceId, "user-b", {
+      source: { kind: "message", content: FACT },
+      facts: [FACT, "M 代表質量，單位是公斤，由物資登記時填寫"],
+    });
+    const written: { type: string; delta?: string }[] = [];
+
+    const out = await propose(
+      {
+        workspaceId,
+        userId: "user-a",
+        inputs: [
+          {
+            source: { kind: "message", content: MESSAGE },
+            chunks: [],
+            facts: [{ content: FACT }],
+          },
+        ],
+      },
+      { writer: (chunk) => written.push(chunk) },
+    );
+
+    expect(out.proposals[0].expires).toEqual([
+      {
+        proposalId: older.id,
+        itemId: older.items[0].id,
+        kind: "add",
+        content: FACT,
+        createdBy: "user-b",
+      },
+    ]);
+    expect(written.map((c) => c.delta ?? "").join("")).toContain(
+      "確認後會讓 1 項較早的待確認項目過期",
     );
   });
 });

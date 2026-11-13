@@ -78,7 +78,9 @@ paths:
         now; kept between the fact's valid-from and now). The reply is a
         short text and a `data-proposal` part with 取代 and 過時 items; when
         other pending proposals already change the same fact, the text says
-        so. When no fact is meant, the reply says it found none and proposes
+        so. When confirming the proposal would expire older pending items
+        (the proposal's `expires`), the text of either kind of input says
+        how many. When no fact is meant, the reply says it found none and proposes
         nothing. Nothing changes until the proposal is confirmed.
 
         Any other message is a question, answered from the workspace's
@@ -223,6 +225,27 @@ paths:
           $ref: "#/components/responses/NotAMember"
         "404":
           $ref: "#/components/responses/ConversationNotFound"
+  /api/proposals:
+    get:
+      operationId: listPendingProposals
+      summary: List the workspace's pending proposals
+      description: >
+        Every pending proposal of the caller's workspace, whoever made it,
+        oldest first. Any member may confirm or reject any of them. A
+        proposal whose every item expired is `expired` and not listed.
+      responses:
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NotAMember"
+        "200":
+          description: The pending proposals, oldest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Proposal"
   /api/proposals/{id}/confirm:
     post:
       operationId: confirmProposal
@@ -233,8 +256,10 @@ paths:
         Of two calls deciding one proposal at once, only the first succeeds.
         Items unticked on the card are sent as `excluded`: they take no
         effect (their facts are rejected, their 取代/過時 targets left as
-        they are, and the item's `status` says `rejected`); at least one
-        item must stay ticked.
+        they are, and the item's `status` says `rejected`) and count in
+        neither the re-check against changes since nor the expiry of older
+        items; at least one live item must stay ticked, and an expired item
+        can't be excluded. A stopped (409) call unticks nothing.
         Items edited inline on the card are sent as `edits`: each such fact
         takes the edited text (trimmed), embedded anew, and keeps the text
         as extracted and the caller as its editor (`edited`). An edit whose
@@ -243,6 +268,25 @@ paths:
         knowledge base as of the item's `effectiveAt` (its valid-to), kept
         in history; a 取代 item's fact becomes its `supersededBy`, so the
         replaced versions show in the citation's `history`.
+
+
+        Any member may confirm a proposal another member made; the caller
+        is its `decidedBy` and its facts' confirmer. Confirming is re-checked
+        against the changes confirmed since the proposal was made, after the
+        edits are applied: a change touches an item when it changed the
+        item's target, or one of its facts is about the same thing as one of
+        the item's (cosine of the new facts and targets at least 0.75). Unless
+        every such change's id is in `acknowledged`, the call is answered 409
+        with the `conflicts` and nothing is written. Confirmed anyway, a 取代
+        or 過時 of a target replaced since applies to the fact now in its
+        place (the item's `target` then names it); when that chain ended in
+        過時, a 過時 does nothing and a 取代's fact follows it. Confirming
+        expires the pending items of older proposals that change the same
+        fact or make the same claim (cosine at least 0.9) as one of its
+        items: their `expiredBy` is this proposal and their facts never
+        enter the knowledge base; an older proposal with no live item left
+        becomes `expired`. Confirmations of a workspace run one at a time,
+        so of two rival proposals confirmed at once only one succeeds.
       parameters:
         - $ref: "#/components/parameters/ProposalId"
       requestBody:
@@ -275,6 +319,15 @@ paths:
                         minLength: 1
                         maxLength: 2000
                         description: The item's text as edited; not blank
+                acknowledged:
+                  type: array
+                  maxItems: 500
+                  description: >
+                    The `changeId`s of the conflicts the member saw and
+                    confirms anyway
+                  items:
+                    type: string
+                    format: uuid
       responses:
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -299,13 +352,22 @@ paths:
           $ref: "#/components/responses/ProposalNotFound"
         "409":
           description: >
-            The proposal was already confirmed or rejected, or a fact it
-            replaces or marks 過時 is no longer current (another proposal
-            changed it first); nothing is decided
+            The proposal was already decided or expired; or the knowledge
+            base changed since it was made, and the changes not acknowledged
+            are listed in `conflicts` (all of them, acknowledged or not);
+            nothing is decided
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
+                type: object
+                required: [error]
+                properties:
+                  error:
+                    type: string
+                  conflicts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Conflict"
   /api/proposals/{id}/reject:
     post:
       operationId: rejectProposal
@@ -554,13 +616,41 @@ components:
           format: uuid
         status:
           type: string
-          enum: [pending, confirmed, rejected]
+          enum: [pending, confirmed, rejected, expired]
+          description: >
+            `expired` once a newer proposal's confirmation expired every item
         createdBy:
           type: string
           description: The Clerk user id of the member who proposed it
         createdAt:
           type: string
           format: date-time
+        decidedBy:
+          type: string
+          description: The member who confirmed or rejected it; absent while pending
+        expires:
+          type: array
+          description: >
+            Present while pending: the pending items of older proposals that
+            confirming it would expire
+          items:
+            type: object
+            required: [proposalId, itemId, kind, content, createdBy]
+            properties:
+              proposalId:
+                type: string
+                format: uuid
+              itemId:
+                type: string
+                format: uuid
+              kind:
+                type: string
+                enum: [add, supersede, obsolete]
+              content:
+                type: string
+                description: Its fact, or for 過時 the fact it would end
+              createdBy:
+                type: string
         items:
           type: array
           description: 取代 and 過時 items first, then 新增 ones
@@ -584,12 +674,13 @@ components:
                 description: That fact's text; absent for 過時
               status:
                 type: string
-                enum: [pending, confirmed, rejected]
+                enum: [pending, confirmed, rejected, expired]
                 description: >
                   `pending` while the proposal is; once it is decided,
                   whether the item took effect (`confirmed`) or not
                   (`rejected`: the proposal was rejected, or the item was
-                  left unticked)
+                  left unticked); `expired` once a newer proposal expired it
+                  (see `expiredBy`)
               edited:
                 $ref: "#/components/schemas/Edited"
               target:
@@ -614,6 +705,41 @@ components:
                 description: >
                   When the change takes effect (取代, 過時): the target's
                   valid-to and the replacement's valid-from once confirmed
+              expiredBy:
+                type: string
+                format: uuid
+                description: >
+                  The newer proposal whose confirmation expired the item
+                  (已過期); it is then never confirmed
+    Conflict:
+      type: object
+      description: >
+        A change confirmed since a proposal was made that touches one of its
+        items
+      required: [itemId, changeId, kind, decidedBy, decidedAt]
+      properties:
+        itemId:
+          type: string
+          format: uuid
+          description: The proposal's item it touches
+        changeId:
+          type: string
+          format: uuid
+          description: The confirmed item that made the change
+        kind:
+          type: string
+          enum: [add, supersede, obsolete]
+        before:
+          type: string
+          description: The fact it replaced or marked 過時 (取代, 過時)
+        after:
+          type: string
+          description: The fact it added (新增, 取代)
+        decidedBy:
+          type: string
+        decidedAt:
+          type: string
+          format: date-time
     HistoryEntry:
       type: object
       required: [factId, content, validFrom, validTo]
