@@ -3,7 +3,7 @@ import cors from "cors";
 import multer from "multer";
 import { z } from "zod";
 import { login, requireAdmin } from "./auth.js";
-import { streamAnswer } from "./chat.js";
+import { streamReply } from "./chat.js";
 import { isSupported } from "./document-chunks.js";
 import {
   addDocuments,
@@ -11,6 +11,8 @@ import {
   listDocuments,
   removeDocument,
 } from "./documents.js";
+import { confirmProposal, rejectProposal } from "./knowledge-base.js";
+import { callerOf } from "./workspaces.js";
 
 export const app = express();
 // Uploads are buffered in memory, so cap what one request can hold.
@@ -60,8 +62,30 @@ app.post("/api/chat", async (req, res) => {
     });
     return;
   }
-  await streamAnswer(res, body.data.messages);
+  await streamReply(res, await callerOf(req), body.data.messages);
 });
+
+// Confirming is the one way facts enter the knowledge base; no model is
+// involved (ADR-0003).
+for (const [action, decide] of [
+  ["confirm", confirmProposal],
+  ["reject", rejectProposal],
+] as const)
+  app.post(`/api/proposals/:id/${action}`, async (req, res) => {
+    const { workspaceId, userId } = await callerOf(req);
+    const result = await decide(workspaceId, req.params.id, userId);
+    if (result === "not found") {
+      res.status(404).json({ error: "proposal not found" });
+      return;
+    }
+    if (result === "already decided") {
+      res
+        .status(409)
+        .json({ error: "proposal was already confirmed or rejected" });
+      return;
+    }
+    res.json(result);
+  });
 
 app.post("/api/login", login);
 

@@ -12,7 +12,9 @@
     "test:watch": "vitest",
     "lint": "eslint",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx --env-file-if-exists=../.env src/migrate.ts"
+    "db:migrate": "tsx --env-file-if-exists=../.env src/migrate.ts",
+    "db:create": "tsx --env-file-if-exists=../.env src/database-cli.ts create",
+    "db:drop": "tsx --env-file-if-exists=../.env src/database-cli.ts drop"
   },
   "dependencies": {
     "@ai-sdk/langchain": "^3.0.172",

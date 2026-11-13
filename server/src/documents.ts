@@ -37,6 +37,8 @@ export interface Passage {
   label: string;
   /** The chunk's original text, shown when the citation is expanded. */
   text: string;
+  /** Its cosine similarity to the question it was retrieved for. */
+  similarity: number;
 }
 
 interface StoredChunk extends Chunk {
@@ -95,7 +97,7 @@ export async function retrieve(
   );
   if (chunks.length === 0) return { passages: [], similarity: 0 };
   const embedding = await embeddings().embedQuery(question);
-  const { ranked, similarity } = hybridSearch(
+  const { ranked, similarities, similarity } = hybridSearch(
     chunks.map(({ chunk }) => ({
       text: chunk.embedText,
       embedding: chunk.embedding,
@@ -110,6 +112,7 @@ export async function retrieve(
       id: `${doc.id}:${i}`,
       label: chunk.path.join(" › "),
       text: chunk.content,
+      similarity: similarities[index],
     };
   });
   return { passages, similarity };

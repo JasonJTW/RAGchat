@@ -3,7 +3,7 @@
 - `npm run dev`: web :3000 + server :4000
 - `npm test`: Vitest in every workspace (`npm test -w web` / `-w server` for one)
 - `npm run test:e2e`: Playwright against `web` (starts `next dev` itself)
-- Postgres (pgvector + pg_trgm, ADR-0001): `npm run db:up` starts the one `docker compose` service every worktree shares (project name `ragchat`, host port `POSTGRES_PORT`, default 5433); `npm run db:migrate` applies migrations to `DATABASE_URL`. Schema in `server/src/db/schema.ts`; after changing it run `npm run db:generate -w server` and commit `server/drizzle/`.
+- Postgres (pgvector + pg_trgm, ADR-0001): `npm run db:up` starts the one `docker compose` service every worktree shares (project name `ragchat`, host port `POSTGRES_PORT`, default 5433); `npm run db:migrate` applies migrations to `DATABASE_URL` (the server also migrates on startup, so `npm run dev` needs Postgres up). Schema in `server/src/db/schema.ts`; after changing it run `npm run db:generate -w server` and commit `server/drizzle/`.
 - Server tests use real Postgres: each `npm test -w server` run creates its own `ragchat_test_<random>` database on the server `DATABASE_URL` names (shell, then root `.env`, else the compose default), migrates it, and drops it at the end, so worktrees run tests in parallel safely. A local run starts the compose service if it is down; CI uses a service container. All test files in one run share that database: isolate tests by creating a workspace per test, never by truncating tables.
 - `npm run lint`, `npm run typecheck`: every workspace (ESLint + `tsc`)
 - `npm run format`: Prettier
@@ -62,6 +62,6 @@ Single-context: one root `GLOSSARY.md` + `docs/adr/`. See `docs/agents/domain.md
 
 - Spec `.scratch/kb-chatbot/spec.md`; tickets `.scratch/kb-chatbot/issues/`; fixtures and answer key `.scratch/kb-chatbot/fixtures/`.
 - Start: `npm run dev` (chat `localhost:3000/`, admin `localhost:3000/admin`; Next rewrites `/api/*` to the server on :4000).
-- Full suite: `npm run lint && npm run typecheck && npm test && npm run test:e2e` (no LLM calls; `@live` tests excluded). E2E starts its own web :3100 + server :4100, never touching a running `npm run dev`.
+- Full suite: `npm run lint && npm run typecheck && npm test && npm run test:e2e` (no LLM calls; `@live` tests excluded). E2E starts its own web :3100 + server :4100 (override with `E2E_WEB_PORT`/`E2E_SERVER_PORT`) on its own `ragchat_e2e_<random>` database, dropped afterwards, never touching a running `npm run dev`.
 - Live tests: `npm run test:live` (Playwright `@live` tests against the real LLM; needs `AI_GATEWAY_API_KEY`).
 - Env (root `.env`, see `.env.example`): `AI_GATEWAY_API_KEY`, `JEV_API_KEY` (Jev subject check; optional, live tests need it), `CHAT_MODEL` (e.g. `openai/gpt-5-mini`), `EXTRACT_MODEL`/`GUEST_MODEL` (optional, default `CHAT_MODEL`), `EMBEDDING_MODEL`, `DATABASE_URL`/`POSTGRES_PORT` (optional), `ADMIN_USERNAME`, `ADMIN_PASSWORD`; server reads `DATA_DIR` (default `server/data/`); web reads `SERVER_URL` (default `http://localhost:4000`).

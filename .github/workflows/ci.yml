@@ -56,6 +56,23 @@ jobs:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      # The E2E server creates its own database on it (see web/playwright.config.ts).
+      postgres:
+        image: pgvector/pgvector:0.8.1-pg17
+        env:
+          POSTGRES_USER: ragchat
+          POSTGRES_PASSWORD: ragchat
+          POSTGRES_DB: ragchat
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ragchat -d ragchat"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgres://ragchat:ragchat@localhost:5432/ragchat
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

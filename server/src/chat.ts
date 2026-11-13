@@ -1,51 +1,16 @@
 import type { Response } from "express";
-// The AI SDK only speaks the UI message stream useChat reads; the models are
-// LangChain's (models.ts), their stream converted by @ai-sdk/langchain.
+// The AI SDK only speaks the UI message stream useChat reads; the agent's
+// nodes write its chunks (agent/state.ts).
 import {
   createUIMessageStream,
   pipeUIMessageStreamToResponse,
   type UIMessageChunk,
 } from "ai";
-import { toUIMessageStream } from "@ai-sdk/langchain";
-import {
-  AIMessage,
-  HumanMessage,
-  SystemMessage,
-} from "@langchain/core/messages";
-import { noul } from "@typesafe-ai/sdk";
-import { retrieve, type Passage } from "./documents.js";
-import { chatModel, SYSTEM_ONE } from "./models.js";
+import { agent } from "./agent/graph.js";
+import type { Turn } from "./agent/state.js";
+import type { Caller } from "./workspaces.js";
 
-/** A passage an answer cites, as shown under the answer. */
-export interface Citation extends Passage {
-  /** The `[n]` the answer marks it with. */
-  marker: number;
-}
-
-const PASSAGES_PER_ANSWER = 6;
-
-/** The fake support address the refusal points to (see the spec's Stubs). */
-const SUPPORT_EMAIL = "support@megaweaving.example";
-
-const REFUSAL_PHRASE = "這個問題我無法回答";
-const REFUSAL = `${REFUSAL_PHRASE}，請來信客服 ${SUPPORT_EMAIL}。`;
-
-// Below this cosine similarity between the question and its best-matching
-// chunk, no document covers the question: refuse without calling the model.
-// Calibrated on the answer key with openai/text-embedding-3-small: answerable
-// questions score 0.38–0.85, Q12 0.22 (0.27 with the PDF and txt uploaded;
-// see the spec's 拒答規則).
-const MIN_SIMILARITY = 0.3;
-
-const SYSTEM_PROMPT = `你是「大量交織 megaweaving」的客服助理。
-- 一律用繁體中文回答，即使使用者用其他語言提問。
-- 只根據使用者訊息裡提供的段落作答，不要用段落以外的知識。
-- 先直接回答問題，再用一兩句補上段落裡跟答案同一處的關鍵細節：條件、材料、人數、年份、原因或出處（例如「不是原創」就說出它源自哪裡）。
-- 問題問要做哪些事、確認什麼、有哪幾類時，段落裡相關的每一項都要列出，不要只挑其中幾項。
-- 每個事實後面用段落編號標出處，例如 [1]、[2]；只標你實際用到的段落，不要另寫「出處：」。
-- 只有當段落對同一件事給出不同說法時（例如人數不同）：先給最新且有日期的說法，再列出其他說法的具體數字與各自的年份、來源，並說明這些說法未經確認。說法一致時不要提矛盾。
-- 例外：段落完全沒有提到問題要問的事時，不要作答，整個回覆只寫這一句（不加段落編號）：${REFUSAL}
-  段落有答案時，照上面的規則完整回答，不要寫這一句。`;
+export type { Citation } from "./agent/ask.js";
 
 /** The parts of an AI SDK UIMessage the chat reads. */
 export interface ChatMessage {
@@ -53,65 +18,33 @@ export interface ChatMessage {
   parts: { type: string; text?: string }[];
 }
 
-const REWRITE_PROMPT = `把使用者的最新問題改寫成一句不需要上文也看得懂的獨立問題：把代名詞與省略的主詞換成對話裡指的那件事。
-- 只輸出改寫後的問題，不要回答、不要解釋。
-- 一律用繁體中文。
-- 最新問題本身已經完整時，原樣輸出。`;
-
-// Asked of Jev about a first question. Validated in ticket 11 on the answer
-// key's first questions; the examples must stay clear of answer-key questions.
-const FIRST_QUESTION_CONTEXT =
-  "大量交織 megaweaving 客服聊天機器人收到的第一則訊息，之前沒有任何對話。機器人回答關於大量交織（理念、FB 社團、megaweaving.net 平台、交換規則、發起人蕭有志、各項計畫）的問題。";
-const UNNAMED_SUBJECT = noul(
-  "這個問題問的是某個特定對象（計畫、活動、案例、物品等），但沒說出它的名稱，只用代名詞（它、那、這、其）指它，或直接省略主詞，所以不知道上文就無法知道在問什麼。",
-  {
-    true: "問題指向一個沒說出名稱的特定對象，例如「它的報名截止日是哪天？」「一共有幾個人參加？」",
-    false:
-      "問題說出了要問的對象名稱，或問的是大量交織、megaweaving.net 平台、社團、交換規則本身的一般使用問題（例如「怎麼刪除自己的貼文？」「社團可以賣東西嗎？」），即使用了「這個」「那個」，後面也接著名稱",
-  },
-);
-// From ticket 11: first questions that name their subject scored at most
-// 0.28, ones that don't at least 0.69 (one miss at 0.41).
-const ASK_WHICH_SUBJECT_AT = 0.5;
-// Jev answers in ~0.2 s warm, ~0.4 s cold; past this the chat answers as usual.
-const JEV_DEADLINE_MS = 1_500;
-
-const CLARIFY = "請問你指的是哪個計畫或主題？";
-
 /**
- * Answers the latest user message from the stored documents, streamed. A
- * follow-up is first rewritten into a standalone question for retrieval; the
- * answer still sees the whole conversation. Every first question is checked
- * by Jev for naming its subject, alongside retrieval; when it doesn't, the
- * reply asks which subject is meant instead of answering.
+ * Runs the agent on the latest user message and streams its reply: an answer
+ * with citations, or a proposal card for input.
  */
-export function streamAnswer(res: Response, messages: ChatMessage[]) {
+export function streamReply(
+  res: Response,
+  caller: Caller,
+  messages: ChatMessage[],
+) {
   const turns = textTurns(messages);
-  const question = turns.at(-1)?.role === "user" ? turns.pop()!.content : "";
+  const message = turns.at(-1)?.role === "user" ? turns.pop()!.content : "";
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
       const abort = new AbortController();
-      // A client that leaves stops the answer too (after a full answer, a no-op).
+      // A client that leaves stops the reply too (after a full reply, a no-op).
       res.once("close", () => abort.abort());
-      // Retrieval runs while Jev checks the question; the answer model is
-      // called only once both are done and Jev found a name.
-      const found = findPassages(turns, question);
-      // When the reply asks for the subject, the passages go unread.
-      found.catch(() => {});
-      const clarify = !turns.length && (await leavesSubjectUnnamed(question));
       writer.write({ type: "start" });
-      writer.write({ type: "text-start", id: "answer" });
-      if (clarify) {
-        writer.write({ type: "text-delta", id: "answer", delta: CLARIFY });
-        writer.write({ type: "text-end", id: "answer" });
-      } else {
-        for await (const part of answerParts(
-          turns,
-          question,
-          await found,
-          abort.signal,
+      try {
+        for await (const chunk of await agent.stream(
+          { ...caller, turns, message },
+          { streamMode: "custom", signal: abort.signal },
         ))
-          writer.write(part);
+          writer.write(chunk as UIMessageChunk);
+      } catch (error) {
+        // The client left mid-reply: nobody reads the rest, and it's no failure.
+        if (abort.signal.aborted) return;
+        throw error;
       }
       writer.write({ type: "finish" });
     },
@@ -129,94 +62,6 @@ export function streamAnswer(res: Response, messages: ChatMessage[]) {
   });
 }
 
-// The passages for the question; a follow-up is first made standalone.
-async function findPassages(turns: Turn[], question: string) {
-  const query = turns.length
-    ? await standaloneQuestion(turns, question)
-    : question;
-  return retrieve(query, PASSAGES_PER_ANSWER);
-}
-
-// The answer's text deltas, its text end, then its citations.
-async function* answerParts(
-  turns: Turn[],
-  question: string,
-  { passages, similarity }: Awaited<ReturnType<typeof findPassages>>,
-  abortSignal: AbortSignal,
-): AsyncGenerator<UIMessageChunk> {
-  if (abortSignal.aborted) return;
-  if (similarity < MIN_SIMILARITY) {
-    yield { type: "text-delta", id: "answer", delta: REFUSAL };
-    yield { type: "text-end", id: "answer" };
-    return;
-  }
-  const stream = await chatModel("answer").stream(
-    [
-      new SystemMessage(SYSTEM_PROMPT),
-      ...turns.map((turn) =>
-        turn.role === "user"
-          ? new HumanMessage(turn.content)
-          : new AIMessage(turn.content),
-      ),
-      new HumanMessage(
-        `段落：\n\n${passages
-          .map((p, i) => `[${i + 1}] ${p.label}\n${p.text}`)
-          .join("\n\n")}\n\n問題：${question}`,
-      ),
-    ],
-    { signal: abortSignal },
-  );
-  let answer = "";
-  try {
-    // The adapter's text deltas go into the answer's one text part, opened
-    // before this and closed below; its other parts (e.g. reasoning) pass
-    // through. The outer stream has its own start and finish.
-    for await (const part of toUIMessageStream(stream, {
-      sendStart: false,
-      sendFinish: false,
-    })) {
-      if (part.type === "text-start" || part.type === "text-end") continue;
-      if (part.type === "text-delta") {
-        answer += part.delta;
-        yield { ...part, id: "answer" };
-      } else yield part;
-    }
-  } catch (error) {
-    // The client left mid-answer: nobody reads the rest, and it's no failure.
-    if (abortSignal.aborted) return;
-    throw error;
-  }
-  yield { type: "text-end", id: "answer" };
-  // A refusal cites nothing, even if the model marked a passage.
-  if (!answer.includes(REFUSAL_PHRASE))
-    for (const citation of cited(answer, passages))
-      yield { type: "data-citation", id: citation.id, data: citation };
-}
-
-// Whether Jev finds the question points at something it never names. No
-// JEV_API_KEY, a failure or no answer within the deadline counts as named.
-async function leavesSubjectUnnamed(question: string): Promise<boolean> {
-  if (!SYSTEM_ONE) return false;
-  try {
-    const { answers } = await SYSTEM_ONE.systemOne(
-      {
-        state: { context: FIRST_QUESTION_CONTEXT, question },
-        questions: { unnamedSubject: UNNAMED_SUBJECT },
-      },
-      { signal: AbortSignal.timeout(JEV_DEADLINE_MS) },
-    );
-    return answers.unnamedSubject.noul >= ASK_WHICH_SUBJECT_AT;
-  } catch (error) {
-    console.warn("subject check failed, answering as usual:", error);
-    return false;
-  }
-}
-
-interface Turn {
-  role: "user" | "assistant";
-  content: string;
-}
-
 // The conversation as plain-text turns; citations and other parts dropped.
 function textTurns(messages: ChatMessage[]): Turn[] {
   return messages.flatMap((message) =>
@@ -231,34 +76,4 @@ function textTurns(messages: ChatMessage[]): Turn[] {
         ]
       : [],
   );
-}
-
-async function standaloneQuestion(
-  turns: Turn[],
-  question: string,
-): Promise<string> {
-  const { text } = await chatModel("answer").invoke([
-    new SystemMessage(REWRITE_PROMPT),
-    new HumanMessage(
-      `對話：\n${turns
-        .map((t) => `${t.role === "user" ? "使用者" : "助理"}：${t.content}`)
-        .join("\n")}\n\n最新問題：${question}`,
-    ),
-  ]);
-  return text.trim() || question;
-}
-
-// The passages the answer marks with [n], in marker order. Marks may be
-// combined, e.g. [1, 3] or [1][3], and the model sometimes writes them in
-// full-width brackets: 〔1〕, ［1］, 【1】.
-function cited(answer: string, passages: Passage[]): Citation[] {
-  const markers = new Set<number>();
-  for (const [, list] of answer.matchAll(
-    /[[〔［【](\d+(?:\s*[,，、]\s*\d+)*)[\]〕］】]/g,
-  ))
-    for (const n of list.split(/[,，、]/)) markers.add(Number(n.trim()));
-  return [...markers]
-    .filter((n) => n >= 1 && n <= passages.length)
-    .sort((a, b) => a - b)
-    .map((n) => ({ ...passages[n - 1], marker: n }));
 }

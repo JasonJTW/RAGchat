@@ -6,6 +6,8 @@ import {
   type BaseMessage,
 } from "@langchain/core/messages";
 import { ChatGenerationChunk, type ChatResult } from "@langchain/core/outputs";
+import { RunnableLambda } from "@langchain/core/runnables";
+import { EMBEDDING_DIMENSIONS } from "./db/schema.js";
 import type { SystemOne } from "./models.js";
 
 /** The fake chat model's next reply and the prompts it was sent. */
@@ -18,6 +20,14 @@ export interface StubChat {
   rewrite: string;
   /** Each rewrite prompt, flattened like `prompts`. */
   rewritePrompts: string[];
+  /**
+   * Answers `withStructuredOutput(...).invoke(messages)` with the last
+   * message's text. By default it extracts facts: each sentence (split at 。
+   * and line breaks) is one fact.
+   */
+  structured: (text: string) => unknown;
+  /** Each structured-output prompt, flattened like `prompts`. */
+  structuredPrompts: string[];
 }
 
 /** The fake Jev's answer to every Noul and the state of each request. */
@@ -58,6 +68,8 @@ export function installStubModels(): {
     prompts: [],
     rewrite: STUB_CHAT_REWRITE,
     rewritePrompts: [],
+    structured: sentencesAsFacts,
+    structuredPrompts: [],
   };
   const vectors = new Map<string, number[]>();
   globalThis.MODEL_STUBS = {
@@ -111,6 +123,15 @@ class StubChatModel extends BaseChatModel {
     return "stub";
   }
 
+  // The real models answer in a given shape by tool calling; this one asks
+  // `chat.structured`.
+  override withStructuredOutput() {
+    return RunnableLambda.from((messages: BaseMessage[]) => {
+      this.chat.structuredPrompts.push(flatten(messages));
+      return this.chat.structured(messages.at(-1)?.text ?? "");
+    }) as unknown as ReturnType<BaseChatModel["withStructuredOutput"]>;
+  }
+
   _generate(messages: BaseMessage[]): Promise<ChatResult> {
     this.chat.rewritePrompts.push(flatten(messages));
     const text = this.chat.rewrite;
@@ -145,9 +166,10 @@ class StubEmbeddings extends Embeddings {
 
   embedDocuments(texts: string[]): Promise<number[][]> {
     (this.embedded[this.model] ??= []).push(...texts);
+    // Zero-padded to the stored length; padding leaves cosines unchanged.
     return Promise.resolve(
-      texts.map(
-        (text) => this.vectors.get(text) ?? stubVector(this.model, text),
+      texts.map((text) =>
+        padded(this.vectors.get(text) ?? stubVector(this.model, text)),
       ),
     );
   }
@@ -161,6 +183,26 @@ class StubEmbeddings extends Embeddings {
 // The system prompt, then each message, as text.
 function flatten(messages: BaseMessage[]): string {
   return messages.map((message) => message.text).join("\n\n");
+}
+
+function padded(vector: number[]): number[] {
+  return vector.length >= EMBEDDING_DIMENSIONS
+    ? vector
+    : [
+        ...vector,
+        ...new Array<number>(EMBEDDING_DIMENSIONS - vector.length).fill(0),
+      ];
+}
+
+// The default structured answer: every sentence of the text is a fact.
+function sentencesAsFacts(text: string) {
+  return {
+    facts: text
+      .split(/[。\n]+/)
+      .map((sentence) => sentence.trim())
+      .filter(Boolean)
+      .map((content) => ({ content })),
+  };
 }
 
 // Hashes character bigrams into 64 buckets, so texts sharing words point the

@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: kb-chatbot server
+  title: MegaWeaving team wiki server
   version: 0.1.0
 servers:
   - url: http://localhost:4000
@@ -21,10 +21,22 @@ paths:
     post:
       operationId: postChat
       security: []
-      summary: Answer a question from the uploaded documents
+      summary: Answer a question, or propose the facts of an input
       description: >
-        Answers the latest user message from the 6 passages that best match
-        it (embedding cosine and BM25, merged by reciprocal rank fusion).
+        The latest user message is either input or a question. A message that
+        opens with an instruction to record what follows (e.g.
+        「請把以下內容輸入到知識庫：…」, 「記下：…」) is input: it is stored as
+        a 來源, its atomic facts are extracted by the extract model, and the
+        reply is a short text and a `data-proposal` part whose `data` is the
+        pending Proposal. Nothing enters the knowledge base until a member
+        confirms the proposal with `POST /api/proposals/{id}/confirm`; no
+        reply of the chat writes to it.
+
+        Any other message is a question, answered from the workspace's
+        current confirmed facts (vector search) and the uploaded documents'
+        passages, merged by cosine similarity (at most 6 in all).
+        Passages are the 6 that best match the question (embedding cosine and
+        BM25, merged by reciprocal rank fusion).
         When earlier messages are sent, the latest one is first rewritten
         into a standalone question for retrieval, and the answer sees the
         whole conversation. The conversation lives only in the client.
@@ -38,7 +50,7 @@ paths:
         After the text, each passage the answer marks with `[n]` arrives as a
         `data-citation` part in the same stream, with `data` shaped like
         Citation. Passages the answer doesn't mark are not sent.
-        When no stored chunk is similar enough to the question (best cosine
+        When no fact or stored chunk is similar enough to the question (best cosine
         similarity below 0.3), or the passages don't answer it, the answer is
         the fixed refusal 「這個問題我無法回答，請來信客服
         support@megaweaving.example。」 with no citations; below the
@@ -90,6 +102,48 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/proposals/{id}/confirm:
+    post:
+      operationId: confirmProposal
+      security: []
+      summary: Confirm a pending proposal into the knowledge base
+      description: >
+        The only way facts enter the knowledge base. Each of the proposal's
+        facts becomes confirmed, recorded now and confirmed by the caller.
+        Of two calls deciding one proposal at once, only the first succeeds.
+      parameters:
+        - $ref: "#/components/parameters/ProposalId"
+      responses:
+        "200":
+          description: The proposal, now `confirmed`
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Proposal"
+        "404":
+          $ref: "#/components/responses/ProposalNotFound"
+        "409":
+          $ref: "#/components/responses/ProposalDecided"
+  /api/proposals/{id}/reject:
+    post:
+      operationId: rejectProposal
+      security: []
+      summary: Reject a pending proposal
+      description: >
+        None of the proposal's facts enter the knowledge base, now or later.
+      parameters:
+        - $ref: "#/components/parameters/ProposalId"
+      responses:
+        "200":
+          description: The proposal, now `rejected`
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Proposal"
+        "404":
+          $ref: "#/components/responses/ProposalNotFound"
+        "409":
+          $ref: "#/components/responses/ProposalDecided"
   /api/login:
     post:
       operationId: login
@@ -266,7 +320,27 @@ components:
       type: apiKey
       in: cookie
       name: admin_session
+  parameters:
+    ProposalId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
   responses:
+    ProposalNotFound:
+      description: No proposal with that id in the caller's workspace
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ProposalDecided:
+      description: The proposal was already confirmed or rejected
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
     Unauthorized:
       description: Not logged in, or wrong credentials
       content:
@@ -282,20 +356,73 @@ components:
           type: string
     Citation:
       type: object
-      required: [id, marker, label, text]
+      required: [id, marker, kind, label, text]
       properties:
         id:
           type: string
+          description: The fact's id, or `<document id>:<chunk index>`
         marker:
           type: integer
           minimum: 1
-          description: The `[n]` the answer marks the passage with
+          description: The `[n]` the answer marks it with
+        kind:
+          type: string
+          enum: [fact, passage]
+          description: A confirmed fact of the knowledge base, or a document passage
         label:
           type: string
-          description: "e.g. `05-projects-and-practice.md › 05 實踐案例 … › C. 移動微型空間計畫`, `04-founder-hsiao-yu-chih.pdf › 第 2 頁`, `faq.txt › Q: 網站有英文版嗎？`"
+          description: "A fact's is `知識庫 · <valid from, YYYY-MM-DD in Taiwan>`; a passage's e.g. `05-projects-and-practice.md › 05 實踐案例 … › C. 移動微型空間計畫`, `04-founder-hsiao-yu-chih.pdf › 第 2 頁`, `faq.txt › Q: 網站有英文版嗎？`"
         text:
           type: string
-          description: The passage's original text
+          description: The fact, or the passage's original text
+        source:
+          type: object
+          description: A fact's 來源 as it was given; absent for passages
+          required: [content, createdAt]
+          properties:
+            content:
+              type: string
+            createdAt:
+              type: string
+              format: date-time
+    Proposal:
+      type: object
+      description: >
+        A 提案: changes to the knowledge base waiting for a member. While
+        `pending`, its facts are not in the knowledge base.
+      required: [id, status, createdBy, createdAt, items]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, confirmed, rejected]
+        createdBy:
+          type: string
+          description: The member who proposed it (`anonymous` until sign-in)
+        createdAt:
+          type: string
+          format: date-time
+        items:
+          type: array
+          items:
+            type: object
+            required: [id, kind, factId, content]
+            properties:
+              id:
+                type: string
+                format: uuid
+              kind:
+                type: string
+                enum: [add, supersede, obsolete]
+                description: 新增, 取代 or 過時; only `add` so far
+              factId:
+                type: string
+                format: uuid
+                description: The fact the item adds
+              content:
+                type: string
     ChunkSummary:
       type: object
       required: [path, preview, embeddingModel]

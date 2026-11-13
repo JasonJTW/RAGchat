@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { logIn, upload } from "./admin-login";
+import { logIn, removeAllDocuments, upload } from "./admin-login";
 import { ask } from "./ask";
 
 // The E2E server's fake chat model always streams this reply (see
@@ -47,13 +47,8 @@ test("a deleted document leaves the list and is no longer cited", async ({
     ).some((label) => /^\[\d+\] 05-projects-and-practice\.md › /.test(label));
   // Start from a known store: earlier tests share this server.
   await logIn(page);
-  await expect(page.getByRole("table")).toHaveAttribute("aria-busy", "false");
+  await removeAllDocuments(page);
   const rows = page.getByRole("table").getByRole("row");
-  while ((await rows.count()) > 1) {
-    const n = await rows.count();
-    await rows.nth(1).getByRole("button", { name: "刪除" }).click();
-    await expect(rows).toHaveCount(n - 1);
-  }
   await upload(page, "01-overview.md", "05-projects-and-practice.md");
   expect(await citesQ4Source()).toBe(true);
 

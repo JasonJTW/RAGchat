@@ -5,6 +5,7 @@ import { DefaultChatTransport } from "ai";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { ProposalCard } from "@/components/proposal-card";
 import type { ChatMessage } from "@/lib/chat-message";
 
 export function Chat() {
@@ -51,6 +52,8 @@ export function Chat() {
                   <p key={i} className="whitespace-pre-wrap">
                     {part.text}
                   </p>
+                ) : part.type === "data-proposal" ? (
+                  <ProposalCard key={i} proposal={part.data} />
                 ) : null,
               )}
               <Citations message={message} />
@@ -69,7 +72,7 @@ export function Chat() {
       >
         <Textarea
           aria-label="問題"
-          placeholder="問問大量交織的事…"
+          placeholder="提問，或寫「請把以下內容輸入到知識庫：…」"
           value={input}
           onChange={(e) => setInput(e.currentTarget.value)}
         />
@@ -95,6 +98,14 @@ function Citations({ message }: { message: ChatMessage }) {
               [{citation.marker}] {citation.label}
             </summary>
             <p className="mt-1 whitespace-pre-wrap">{citation.text}</p>
+            {citation.source && (
+              <figure className="mt-1">
+                <figcaption className="text-xs">來源原文</figcaption>
+                <blockquote className="border-l-2 pl-2 whitespace-pre-wrap">
+                  {citation.source.content}
+                </blockquote>
+              </figure>
+            )}
           </details>
         </li>
       ))}

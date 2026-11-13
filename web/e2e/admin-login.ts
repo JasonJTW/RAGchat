@@ -29,3 +29,14 @@ export async function upload(page: Page, ...names: string[]) {
     timeout: 120_000,
   });
 }
+
+/** Deletes every uploaded document, from the logged-in admin. */
+export async function removeAllDocuments(page: Page) {
+  await expect(page.getByRole("table")).toHaveAttribute("aria-busy", "false");
+  const rows = page.getByRole("table").getByRole("row");
+  while ((await rows.count()) > 1) {
+    const n = await rows.count();
+    await rows.nth(1).getByRole("button", { name: "刪除" }).click();
+    await expect(rows).toHaveCount(n - 1);
+  }
+}

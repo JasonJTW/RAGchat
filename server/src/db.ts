@@ -19,6 +19,13 @@ const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL || DEFAULT_DATABASE_URL,
 });
 
+// An idle connection that drops (e.g. Postgres restarts, or a test run drops
+// its database) is replaced on the next query; without a listener it would
+// crash the server.
+pool.on("error", (error) => {
+  console.error("database connection lost:", error.message);
+});
+
 export const db = drizzle(pool, { schema });
 
 /** Applies every migration not yet applied to the database. */

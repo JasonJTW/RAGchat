@@ -13,8 +13,9 @@ export interface Searchable {
 }
 
 /**
- * Indexes into `items` of the best `limit` matches, best first, and the
- * highest cosine similarity of any item to the query (0 when there are none).
+ * Indexes into `items` of the best `limit` matches, best first, each item's
+ * cosine similarity to the query, and the highest of them (0 when there are
+ * none).
  * RRF scores only reflect rank, so the similarity is what says how well the
  * best match fits.
  */
@@ -23,7 +24,7 @@ export function hybridSearch(
   query: string,
   queryVector: number[],
   limit: number,
-): { ranked: number[]; similarity: number } {
+): { ranked: number[]; similarities: number[]; similarity: number } {
   const similarities = items.map((item) => cosine(item.embedding, queryVector));
   const fused = new Map<number, number>();
   for (const ranking of [top(similarities), top(bm25(items, query))])
@@ -35,6 +36,7 @@ export function hybridSearch(
       .sort((a, b) => b[1] - a[1])
       .slice(0, limit)
       .map(([index]) => index),
+    similarities,
     similarity: Math.max(0, ...similarities),
   };
 }

@@ -1,12 +1,36 @@
-import { mkdtempSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { parseEnv } from "node:util";
 import { defineConfig, devices } from "@playwright/test";
 import { ADMIN_PASSWORD, ADMIN_USERNAME } from "./e2e/admin-login";
 
 // Override to run beside another checkout's E2E run.
 const WEB_PORT = Number(process.env.E2E_WEB_PORT ?? 3100);
 const SERVER_PORT = Number(process.env.E2E_SERVER_PORT ?? 4100);
+
+// The E2E server's own database on the developer's Postgres (DATABASE_URL from
+// the shell, then the root .env, else the docker compose default), created
+// before the server starts and dropped by e2e/global-teardown.ts. Set once in
+// env, since workers load this file again.
+process.env.E2E_DATABASE_URL ??= (() => {
+  const url = new URL(
+    process.env.DATABASE_URL ||
+      rootEnv().DATABASE_URL ||
+      "postgres://ragchat:ragchat@localhost:5433/ragchat",
+  );
+  url.pathname = `/ragchat_e2e_${randomBytes(6).toString("hex")}`;
+  return url.href;
+})();
+
+function rootEnv(): Record<string, string | undefined> {
+  try {
+    return parseEnv(readFileSync(path.join(__dirname, "../.env"), "utf8"));
+  } catch {
+    return {};
+  }
+}
 
 export default defineConfig({
   testDir: "./e2e",
@@ -19,6 +43,7 @@ export default defineConfig({
   // word on the model's side alone (ticket 12's Strikes), so retry them once.
   retries: process.env.CI ? 2 : process.env.LIVE ? 1 : 0,
   reporter: "html",
+  globalTeardown: "./e2e/global-teardown.ts",
   use: {
     baseURL: `http://localhost:${WEB_PORT}`,
     trace: "on-first-retry",
@@ -28,10 +53,12 @@ export default defineConfig({
   // `npm run dev` on :3000/:4000, so test uploads can't leak into it.
   webServer: [
     {
-      command: "npm run dev -w server",
+      // The server migrates the new database on startup.
+      command: "npm run db:create -w server && npm run dev -w server",
       cwd: "..",
       env: {
         PORT: String(SERVER_PORT),
+        DATABASE_URL: process.env.E2E_DATABASE_URL,
         ADMIN_USERNAME,
         ADMIN_PASSWORD,
         // A fresh, empty document store per run, never the dev server/data/.
