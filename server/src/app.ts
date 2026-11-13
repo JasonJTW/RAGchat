@@ -8,6 +8,11 @@ import multer from "multer";
 import { z } from "zod";
 import { authentication, identify } from "./auth.js";
 import { streamReply } from "./chat.js";
+import {
+  listConversations,
+  mayContinue,
+  readConversation,
+} from "./conversations.js";
 import { isSupported } from "./document-chunks.js";
 import {
   addDocuments,
@@ -67,7 +72,10 @@ const requireMember: RequestHandler = async (req, res, next) => {
   next();
 };
 const callerIn = (res: Response) => res.locals.caller as Caller;
-app.use(["/api/chat", "/api/proposals", "/api/documents"], requireMember);
+app.use(
+  ["/api/chat", "/api/conversations", "/api/proposals", "/api/documents"],
+  requireMember,
+);
 
 // Check the shapes the server reads and cap the size. Earlier answers come
 // back in the history, so only questions are kept short.
@@ -81,7 +89,12 @@ const chatMessage = (role: z.ZodType<string>, maxText: number) =>
       }),
     ),
   });
+/** A conversation id: the chat id the web picks. */
+const ConversationId = z.string().regex(/^[\w-]{1,64}$/);
+
 const ChatRequest = z.object({
+  /** Present when the conversation is to be saved (see conversations.ts). */
+  id: ConversationId.optional(),
   messages: z
     .array(
       z.union([
@@ -101,7 +114,29 @@ app.post("/api/chat", async (req, res) => {
     });
     return;
   }
-  await streamReply(res, callerIn(res), body.data.messages);
+  const { id, messages } = body.data;
+  // Someone else's conversation is answered as if it didn't exist.
+  if (id && !(await mayContinue(callerIn(res), id))) {
+    res.status(404).json({ error: "conversation not found" });
+    return;
+  }
+  await streamReply(res, callerIn(res), messages, id);
+});
+
+// A 成員 sees only their own conversations; anyone else's is 404.
+app.get("/api/conversations", async (_req, res) => {
+  res.json(await listConversations(callerIn(res)));
+});
+
+app.get("/api/conversations/:id", async (req, res) => {
+  const id = ConversationId.safeParse(req.params.id);
+  const conversation =
+    id.success && (await readConversation(callerIn(res), id.data));
+  if (!conversation) {
+    res.status(404).json({ error: "conversation not found" });
+    return;
+  }
+  res.json(conversation);
 });
 
 app.get("/api/proposals", async (_req, res) => {

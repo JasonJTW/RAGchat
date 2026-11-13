@@ -9,28 +9,30 @@ import { ProposalCard } from "@/components/proposal-card";
 import type { ChatMessage, HistoryEntry } from "@/lib/chat-message";
 import { teamDate } from "@/lib/team-date";
 
-export function Chat() {
-  const { messages, sendMessage, setMessages, status, stop } =
-    useChat<ChatMessage>({
-      transport: new DefaultChatTransport({ api: "/api/chat" }),
-    });
+/**
+ * One conversation: its messages and the box to ask or input. The server
+ * saves it under `id` with every reply; `onSaved` runs once a reply is in.
+ */
+export function Chat({
+  id,
+  initialMessages,
+  onSaved,
+}: {
+  id: string;
+  initialMessages: ChatMessage[];
+  onSaved: () => void;
+}) {
+  const { messages, sendMessage, status } = useChat<ChatMessage>({
+    id,
+    messages: initialMessages,
+    transport: new DefaultChatTransport({ api: "/api/chat" }),
+    onFinish: onSaved,
+  });
   const [input, setInput] = useState("");
   const busy = status === "submitted" || status === "streaming";
 
   return (
     <div className="flex flex-1 flex-col gap-4">
-      <Button
-        type="button"
-        variant="outline"
-        className="self-end"
-        onClick={() => {
-          void stop();
-          setMessages([]);
-          setInput("");
-        }}
-      >
-        新對話
-      </Button>
       <div className="flex flex-1 flex-col gap-3">
         {messages.map((message) =>
           message.role === "user" ? (
