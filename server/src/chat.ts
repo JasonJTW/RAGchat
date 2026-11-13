@@ -1,14 +1,17 @@
+import { randomUUID } from "node:crypto";
 import type { Response } from "express";
 // The AI SDK only speaks the UI message stream useChat reads; the agent's
 // nodes write its chunks (agent/state.ts).
 import {
   createUIMessageStream,
   pipeUIMessageStreamToResponse,
+  type UIMessage,
   type UIMessageChunk,
 } from "ai";
 import { agent } from "./agent/graph.js";
 import type { Upload } from "./agent/input.js";
 import type { Turn } from "./agent/state.js";
+import { saveConversation } from "./conversations.js";
 import type { Caller } from "./workspaces.js";
 
 export type { Citation } from "./agent/ask.js";
@@ -50,14 +53,18 @@ export function attachedFiles(messages: ChatMessage[]): Upload[] | "invalid" {
 
 /**
  * Runs the agent on the latest user message and its attached files, and
- * streams its reply: an answer with citations, or proposal cards for input or a
- * correction.
+ * streams its reply: an answer with citations, or proposal cards for input or
+ * a correction. With a conversation id, the messages and the reply are saved
+ * as the caller's conversation before the response ends (also when the
+ * client leaves mid-reply), attached files reduced to their names (see
+ * conversations.ts); the caller must be allowed to continue it.
  */
 export function streamReply(
   res: Response,
   caller: Caller,
   messages: ChatMessage[],
   files: Upload[],
+  conversationId?: string,
 ) {
   const turns = textTurns(messages);
   const message = turns.at(-1)?.role === "user" ? turns.pop()!.content : "";
@@ -86,6 +93,13 @@ export function streamReply(
       console.error("chat failed:", error);
       return "回答時發生錯誤，請稍後再試。";
     },
+    ...(conversationId && {
+      originalMessages: messages as UIMessage[],
+      generateId: randomUUID,
+      onEnd: async ({ messages: all }) => {
+        await saveConversation(caller, conversationId, all);
+      },
+    }),
   });
   return pipeUIMessageStreamToResponse({
     response: res,

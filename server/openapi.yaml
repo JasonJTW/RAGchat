@@ -89,7 +89,11 @@ paths:
         file's passages are never answered from.
         When earlier messages are sent, the latest one is first rewritten
         into a standalone question for retrieval, and the answer sees the
-        whole conversation. The conversation lives only in the client.
+        whole conversation. The client sends the whole conversation each
+        time; with an `id`, the messages and the reply are saved as the
+        caller's conversation (see /api/conversations) before the stream
+        ends, also when the client leaves mid-reply; an attached file is
+        saved as its `filename` and `mediaType` only, never its data.
         When the latest message is the only one, Jev (TypeSafe) is asked,
         within 1.5 s and while retrieval runs alongside, whether it points at
         a subject it never names. If it does, the reply is the fixed sentence
@@ -115,6 +119,8 @@ paths:
               type: object
               required: [messages]
               properties:
+                id:
+                  $ref: "#/components/schemas/ConversationId"
                 messages:
                   type: array
                   description: AI SDK UIMessage objects, oldest first
@@ -160,7 +166,8 @@ paths:
           description: >
             `messages` is missing or malformed, has more than 50 messages, has
             a text over its length limit, or its latest message attaches more
-            than 10 files or a file whose `url` is not a base64 data URL
+            than 10 files or a file whose `url` is not a base64 data URL; or
+            `id` is malformed
           content:
             application/json:
               schema:
@@ -171,6 +178,51 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/ConversationNotFound"
+  /api/conversations:
+    get:
+      operationId: listConversations
+      summary: The caller's saved conversations, most recently continued first
+      description: >
+        Only the caller's own conversations in their workspace; nobody sees
+        another 成員's.
+      responses:
+        "200":
+          description: The caller's conversations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ConversationSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NotAMember"
+  /api/conversations/{id}:
+    get:
+      operationId: getConversation
+      summary: One of the caller's conversations, with its messages
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ConversationId"
+      responses:
+        "200":
+          description: The conversation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Conversation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NotAMember"
+        "404":
+          $ref: "#/components/responses/ConversationNotFound"
   /api/proposals/{id}/confirm:
     post:
       operationId: confirmProposal
@@ -372,6 +424,14 @@ components:
         type: string
         format: uuid
   responses:
+    ConversationNotFound:
+      description: >
+        No conversation with that id is the caller's (another 成員's, or
+        another workspace's, counts as none)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
     ProposalNotFound:
       description: No proposal with that id in the caller's workspace
       content:
@@ -397,6 +457,38 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
   schemas:
+    ConversationId:
+      type: string
+      pattern: "^[\\w-]{1,64}$"
+      description: The chat id the client picks for a conversation
+    ConversationSummary:
+      type: object
+      required: [id, title, updatedAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/ConversationId"
+        title:
+          type: string
+          description: The first user message, at most 40 characters
+        updatedAt:
+          type: string
+          format: date-time
+    Conversation:
+      allOf:
+        - $ref: "#/components/schemas/ConversationSummary"
+        - type: object
+          required: [messages]
+          properties:
+            messages:
+              type: array
+              description: >
+                AI SDK UIMessage objects, oldest first, as the chat showed
+                them (text, `file`, `data-citation` and `data-proposal`
+                parts). A `file` part has only `filename` and `mediaType`:
+                attachments' contents are not kept here. A proposal part is
+                the card as it was proposed.
+              items:
+                type: object
     Error:
       type: object
       required: [error]

@@ -16,7 +16,7 @@ const MAX_FILES = 10;
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 
 // An attached file was read when its message was sent; later requests carry
-// the conversation without the files' data.
+// it by name only, without its data.
 const transport = new DefaultChatTransport<ChatMessage>({
   api: "/api/chat",
   prepareSendMessagesRequest: ({ messages, body, id, trigger, messageId }) => ({
@@ -30,16 +30,34 @@ const transport = new DefaultChatTransport<ChatMessage>({
           ? message
           : {
               ...message,
-              parts: message.parts.filter((part) => part.type !== "file"),
+              parts: message.parts.map((part) =>
+                part.type === "file" ? { ...part, url: "" } : part,
+              ),
             },
       ),
     },
   }),
 });
 
-export function Chat() {
-  const { messages, sendMessage, setMessages, status, stop } =
-    useChat<ChatMessage>({ transport });
+/**
+ * One conversation: its messages and the box to ask or input. The server
+ * saves it under `id` with every reply; `onSaved` runs once a reply is in.
+ */
+export function Chat({
+  id,
+  initialMessages,
+  onSaved,
+}: {
+  id: string;
+  initialMessages: ChatMessage[];
+  onSaved: () => void;
+}) {
+  const { messages, sendMessage, status } = useChat<ChatMessage>({
+    id,
+    messages: initialMessages,
+    transport,
+    onFinish: onSaved,
+  });
   const [input, setInput] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [fileError, setFileError] = useState("");
@@ -58,19 +76,6 @@ export function Chat() {
 
   return (
     <div className="flex flex-1 flex-col gap-4">
-      <Button
-        type="button"
-        variant="outline"
-        className="self-end"
-        onClick={() => {
-          void stop();
-          setMessages([]);
-          setInput("");
-          setFiles([]);
-        }}
-      >
-        新對話
-      </Button>
       <div className="flex flex-1 flex-col gap-3">
         {messages.map((message) =>
           message.role === "user" ? (

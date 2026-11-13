@@ -3,6 +3,7 @@ import {
   boolean,
   index,
   integer,
+  jsonb,
   pgEnum,
   pgTable,
   text,
@@ -204,3 +205,32 @@ export const proposalItems = pgTable("proposal_items", {
   /** Left unticked when the proposal was confirmed: it took no effect. */
   excluded: boolean("excluded").notNull().default(false),
 });
+
+/**
+ * 對話: one 成員's chat thread in one workspace, saved as the UI messages the
+ * chat shows (text, citations, proposal cards). Only its owner may read or
+ * continue it. `id` is the chat id the web picks.
+ */
+export const conversations = pgTable(
+  "conversations",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: workspaceId(),
+    userId: text("user_id").notNull(),
+    title: text("title").notNull(),
+    messages: jsonb("messages").$type<unknown[]>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("conversations_owner_idx").on(
+      table.workspaceId,
+      table.userId,
+      table.updatedAt,
+    ),
+  ],
+);

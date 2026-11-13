@@ -1,9 +1,104 @@
 {
-  "id": "4f5c4694-e307-41c2-acf0-c1b500f0defe",
+  "id": "88d24f55-6c68-4a83-ad71-68dd46d9d84c",
   "prevId": "1d52756d-3a81-4153-8a3f-b11b85e6e15a",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
+    "public.conversations": {
+      "name": "conversations",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "messages": {
+          "name": "messages",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "conversations_owner_idx": {
+          "name": "conversations_owner_idx",
+          "columns": [
+            {
+              "expression": "workspace_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "conversations_workspace_id_workspaces_id_fk": {
+          "name": "conversations_workspace_id_workspaces_id_fk",
+          "tableFrom": "conversations",
+          "tableTo": "workspaces",
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.facts": {
       "name": "facts",
       "schema": "",
@@ -26,12 +121,6 @@
           "type": "uuid",
           "primaryKey": false,
           "notNull": true
-        },
-        "chunk_id": {
-          "name": "chunk_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
         },
         "content": {
           "name": "content",
@@ -181,15 +270,6 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "facts_chunk_id_source_chunks_id_fk": {
-          "name": "facts_chunk_id_source_chunks_id_fk",
-          "tableFrom": "facts",
-          "tableTo": "source_chunks",
-          "columnsFrom": ["chunk_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
         "facts_superseded_by_facts_id_fk": {
           "name": "facts_superseded_by_facts_id_fk",
           "tableFrom": "facts",
@@ -266,13 +346,6 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
-        },
-        "excluded": {
-          "name": "excluded",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
         }
       },
       "indexes": {},
@@ -404,141 +477,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.source_chunks": {
-      "name": "source_chunks",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "workspace_id": {
-          "name": "workspace_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "source_id": {
-          "name": "source_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "position": {
-          "name": "position",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "path": {
-          "name": "path",
-          "type": "text[]",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "content": {
-          "name": "content",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "embedding": {
-          "name": "embedding",
-          "type": "vector(1536)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "embedding_model": {
-          "name": "embedding_model",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "source_chunks_source": {
-          "name": "source_chunks_source",
-          "columns": [
-            {
-              "expression": "source_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "position",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "source_chunks_embedding": {
-          "name": "source_chunks_embedding",
-          "columns": [
-            {
-              "expression": "embedding",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last",
-              "opclass": "vector_cosine_ops"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "hnsw",
-          "with": {}
-        },
-        "source_chunks_content_trgm": {
-          "name": "source_chunks_content_trgm",
-          "columns": [
-            {
-              "expression": "content",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last",
-              "opclass": "gin_trgm_ops"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "gin",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "source_chunks_workspace_id_workspaces_id_fk": {
-          "name": "source_chunks_workspace_id_workspaces_id_fk",
-          "tableFrom": "source_chunks",
-          "tableTo": "workspaces",
-          "columnsFrom": ["workspace_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "source_chunks_source_id_sources_id_fk": {
-          "name": "source_chunks_source_id_sources_id_fk",
-          "tableFrom": "source_chunks",
-          "tableTo": "sources",
-          "columnsFrom": ["source_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.sources": {
       "name": "sources",
       "schema": "",
@@ -562,12 +500,6 @@
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
-        },
-        "filename": {
-          "name": "filename",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         },
         "content": {
           "name": "content",
