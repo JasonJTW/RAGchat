@@ -6,7 +6,8 @@ import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ProposalCard } from "@/components/proposal-card";
-import type { ChatMessage } from "@/lib/chat-message";
+import type { ChatMessage, HistoryEntry } from "@/lib/chat-message";
+import { teamDate } from "@/lib/team-date";
 
 // What the server reads as a 來源 (server/src/source-files.ts); it says so
 // itself when a file is of another format.
@@ -207,6 +208,7 @@ function Citations({ message }: { message: ChatMessage }) {
                 </blockquote>
               </figure>
             )}
+            {citation.history && <History entries={citation.history} />}
             {citation.source && (
               <figure className="mt-1">
                 <figcaption className="text-xs">
@@ -239,4 +241,27 @@ function filePart(file: File): Promise<FileUIPart> {
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
+}
+
+/** A fact's history chain, oldest first: each version, when it held, and why. */
+function History({ entries }: { entries: HistoryEntry[] }) {
+  return (
+    <figure className="mt-1">
+      <figcaption className="text-xs">歷史</figcaption>
+      <ol aria-label="歷史" className="list-decimal pl-5">
+        {entries.map((entry) => (
+          <li key={entry.factId}>
+            <span className={entry.validTo ? "text-zinc-400" : undefined}>
+              {entry.content}
+            </span>
+            <span className="ml-2 text-xs">
+              {teamDate(entry.validFrom)} 起
+              {entry.validTo ? `，${teamDate(entry.validTo)} 止` : "，現行"}
+              {entry.reason && `；原因：${entry.reason}`}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </figure>
+  );
 }

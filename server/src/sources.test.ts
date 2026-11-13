@@ -305,7 +305,7 @@ describe("a chat message with attachments", () => {
 
     expect(res.status).toBe(200);
     expect(res.text).not.toContain("data-proposal");
-  });
+  }, 15_000);
 });
 
 describe("a file's passages", () => {

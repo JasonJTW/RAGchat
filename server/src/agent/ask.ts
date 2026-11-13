@@ -5,7 +5,12 @@ import {
   SystemMessage,
 } from "@langchain/core/messages";
 import { noul } from "@typesafe-ai/sdk";
-import { type Edited, searchChunks, searchFacts } from "../knowledge-base.js";
+import {
+  type Edited,
+  type HistoryEntry,
+  searchChunks,
+  searchFacts,
+} from "../knowledge-base.js";
 import { chatModel, systemOne } from "../models.js";
 import { type NodeConfig, type State, type Turn, writeText } from "./state.js";
 
@@ -26,6 +31,8 @@ export interface Evidence {
    * message, or the passage of a file it came from, with that passage's label.
    */
   source?: { content: string; createdAt: string; label?: string };
+  /** A fact's history chain, oldest first, when it replaced another. */
+  history?: HistoryEntry[];
 }
 
 /** Evidence an answer cites, as shown under the answer. */
@@ -151,6 +158,7 @@ export async function retrieve(
         label: `知識庫 · ${TEAM_DATE.format(new Date(fact.validFrom))}`,
         text: fact.content,
         ...(fact.edited && { edited: fact.edited }),
+        ...(fact.history && { history: fact.history }),
         source: {
           content: fact.source.content,
           createdAt: fact.source.createdAt,

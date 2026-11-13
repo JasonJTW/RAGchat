@@ -10,6 +10,7 @@ CREATE TABLE "source_chunks" (
 );
 --> statement-breakpoint
 ALTER TABLE "facts" ADD COLUMN "chunk_id" uuid;--> statement-breakpoint
+ALTER TABLE "proposal_items" ADD COLUMN "excluded" boolean DEFAULT false NOT NULL;--> statement-breakpoint
 ALTER TABLE "sources" ADD COLUMN "filename" text;--> statement-breakpoint
 ALTER TABLE "source_chunks" ADD CONSTRAINT "source_chunks_workspace_id_workspaces_id_fk" FOREIGN KEY ("workspace_id") REFERENCES "public"."workspaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "source_chunks" ADD CONSTRAINT "source_chunks_source_id_sources_id_fk" FOREIGN KEY ("source_id") REFERENCES "public"."sources"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint

@@ -381,7 +381,7 @@ describe("POST /api/chat", () => {
       jev.noul = 0.9;
       const app = await startServerWithUpload();
 
-      const parts = await ask(app, "更新一下，它現在改成每週四開會");
+      const parts = await ask(app, "補充一下，它每週四開會");
 
       expect(jev.states).toHaveLength(0);
       expect(textOf(parts)).not.toBe(CLARIFY);

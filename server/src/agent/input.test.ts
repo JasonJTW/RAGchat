@@ -26,17 +26,17 @@ const file = (filename: string, bytes: Buffer | string) => ({
 
 /** A file's draft after 轉文字 and 切 chunk. */
 async function chunked(filename: string, bytes: Buffer | string) {
-  const { drafts } = await toText({
+  const { inputs } = await toText({
     message: "",
     files: [file(filename, bytes)],
   });
-  return chunk({ drafts }).drafts;
+  return chunk({ inputs }).inputs;
 }
 
 describe("toText", () => {
   it("takes a message without files as the one input", async () => {
     expect(await toText({ message: MESSAGE, files: [] })).toEqual({
-      drafts: [
+      inputs: [
         {
           source: { kind: "message", content: MESSAGE },
           chunks: [],
@@ -53,7 +53,7 @@ describe("toText", () => {
       files: [file("pickup-notice.txt", NOTICE), file("b.md", "# B\n\nb")],
     });
 
-    expect(out.drafts.map((d) => d.source)).toEqual([
+    expect(out.inputs.map((d) => d.source)).toEqual([
       {
         kind: "file",
         filename: "pickup-notice.txt",
@@ -69,7 +69,7 @@ describe("toText", () => {
       files: [file("a.txt", "a"), file("budget.xlsx", "PK")],
     });
 
-    expect(out.drafts).toEqual([]);
+    expect(out.inputs).toEqual([]);
     expect(out.refusal).toMatchObject({ reason: "unsupported" });
     expect(out.refusal!.message).toMatch(/^不支援的檔案格式：budget\.xlsx/);
   });
@@ -88,14 +88,14 @@ describe("chunk", () => {
   it("splits a file into its passages, leaving a message whole", async () => {
     const [notice] = await chunked("pickup-notice.txt", NOTICE);
     const message = chunk({
-      drafts: [
+      inputs: [
         {
           source: { kind: "message", content: MESSAGE },
           chunks: [],
           facts: [],
         },
       ],
-    }).drafts[0];
+    }).inputs[0];
 
     expect(notice.chunks.map((c) => c.path)).toEqual([
       ["pickup-notice.txt", "取件與交接須知"],
@@ -104,7 +104,7 @@ describe("chunk", () => {
   });
 
   it("refuses an input of over 100 passages", async () => {
-    const { drafts } = await toText({
+    const { inputs } = await toText({
       message: "",
       files: [
         file(
@@ -117,7 +117,7 @@ describe("chunk", () => {
       ],
     });
 
-    expect(chunk({ drafts }).refusal).toMatchObject({ reason: "too long" });
+    expect(chunk({ inputs }).refusal).toMatchObject({ reason: "too long" });
   });
 });
 
@@ -126,8 +126,8 @@ describe("extract", () => {
     const { chat } = installStubModels();
     chat.structured = () => ({ facts: [{ content: FACT }] });
 
-    const { drafts } = await extract({
-      drafts: [
+    const { inputs } = await extract({
+      inputs: [
         {
           source: { kind: "message", content: MESSAGE },
           chunks: [],
@@ -136,7 +136,7 @@ describe("extract", () => {
       ],
     });
 
-    expect(drafts[0].facts).toEqual([{ content: FACT, chunk: undefined }]);
+    expect(inputs[0].facts).toEqual([{ content: FACT, chunk: undefined }]);
     expect(chat.structuredPrompts).toHaveLength(1);
     expect(chat.structuredPrompts[0]).toContain(FACT);
     expect(chat.structuredPrompts[0]).not.toContain("請把以下內容輸入到知識庫");
@@ -148,8 +148,8 @@ describe("extract", () => {
       facts: [{ content: " " }, { content: "R 是取代率" }],
     });
 
-    const { drafts } = await extract({
-      drafts: [
+    const { inputs } = await extract({
+      inputs: [
         {
           source: { kind: "message", content: "記下：R 是取代率" },
           chunks: [],
@@ -158,7 +158,7 @@ describe("extract", () => {
       ],
     });
 
-    expect(drafts[0].facts.map((f) => f.content)).toEqual(["R 是取代率"]);
+    expect(inputs[0].facts.map((f) => f.content)).toEqual(["R 是取代率"]);
   });
 
   it("extracts a file passage by passage, each fact knowing its passage", async () => {
@@ -168,15 +168,15 @@ describe("extract", () => {
         { content: text.includes("notes.md › A") ? "A 的事實" : "B 的事實" },
       ],
     });
-    const drafts = await chunked(
+    const inputs = await chunked(
       "notes.md",
       `# A\n\n${"甲".repeat(40)}\n\n# B\n\n${"乙".repeat(40)}`,
     );
 
-    const out = await extract({ message: "", files: [], drafts });
+    const out = await extract({ message: "", files: [], inputs });
 
     expect(chat.structuredPrompts).toHaveLength(2);
-    expect(out.drafts[0].facts).toEqual([
+    expect(out.inputs[0].facts).toEqual([
       { content: "A 的事實", chunk: 0 },
       { content: "B 的事實", chunk: 1 },
     ]);
@@ -184,12 +184,12 @@ describe("extract", () => {
 
   it("passes the member's note on the files along as context", async () => {
     const { chat } = installStubModels();
-    const drafts = await chunked("pickup-notice.txt", NOTICE);
+    const inputs = await chunked("pickup-notice.txt", NOTICE);
 
     await extract({
       message: "這是給新志工的取件須知",
       files: [file("pickup-notice.txt", NOTICE)],
-      drafts,
+      inputs,
     });
 
     expect(chat.structuredPrompts[0]).toContain("這是給新志工的取件須知");
@@ -208,9 +208,9 @@ describe("extract", () => {
   ])("hints the prompt with the kind of %s", async (name, text, hint) => {
     const { chat } = installStubModels();
 
-    await extract({ drafts: await chunked(name, text) });
+    await extract({ inputs: await chunked(name, text) });
     await extract({
-      drafts: await chunked("notes.md", "# 筆記\n\n倉庫在三樓"),
+      inputs: await chunked("notes.md", "# 筆記\n\n倉庫在三樓"),
     });
 
     const [hinted, unhinted] = chat.structuredPrompts;
@@ -230,7 +230,7 @@ describe("propose", () => {
       {
         workspaceId,
         userId: "user-a",
-        drafts: [
+        inputs: [
           {
             source: { kind: "message", content: MESSAGE },
             chunks: [],
@@ -267,7 +267,7 @@ describe("propose", () => {
     const out = await propose({
       workspaceId,
       userId: "user-a",
-      drafts: [
+      inputs: [
         { ...draft, facts: [{ content: "取件前先確認物品狀況", chunk: 0 }] },
       ],
     });
@@ -287,7 +287,7 @@ describe("propose", () => {
       {
         workspaceId,
         userId: "user-a",
-        drafts: [
+        inputs: [
           {
             source: { kind: "message", content: "記下：" },
             chunks: [],
@@ -316,7 +316,7 @@ describe("propose", () => {
       {
         workspaceId: await createWorkspace("guest", "test"),
         userId: "user-a",
-        drafts: [],
+        inputs: [],
         refusal: { reason: "unsupported", message: "不支援的檔案格式：a.xlsx" },
       },
       { writer: (c) => written.push(c) },

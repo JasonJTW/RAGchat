@@ -1,4 +1,6 @@
 import {
+  type AnyPgColumn,
+  boolean,
   index,
   integer,
   pgEnum,
@@ -131,9 +133,19 @@ export const facts = pgTable(
     originalContent: text("original_content"),
     /** Who edited it inline; null while unedited. */
     editedBy: text("edited_by"),
+    /**
+     * The fact that replaced it (取代); null while current or when it was
+     * marked 過時 without a replacement. Following it backwards from a
+     * current fact gives that fact's history chain.
+     */
+    supersededBy: uuid("superseded_by").references(
+      (): AnyPgColumn => facts.id,
+      { onDelete: "set null" },
+    ),
   },
   (t) => [
     index("facts_workspace_status").on(t.workspaceId, t.status),
+    index("facts_superseded_by").on(t.supersededBy),
     index("facts_embedding").using("hnsw", t.embedding.op("vector_cosine_ops")),
   ],
 );
@@ -174,10 +186,21 @@ export const proposalItems = pgTable("proposal_items", {
     .notNull()
     .references(() => proposals.id, { onDelete: "cascade" }),
   kind: proposalItemKind("kind").notNull(),
+  /** The item's place on the card, from 0. */
+  position: integer("position").notNull().default(0),
   /** The pending fact the item adds (新增, 取代). */
   factId: uuid("fact_id").references(() => facts.id, { onDelete: "cascade" }),
   /** The fact it supersedes or marks obsolete (取代, 過時). */
   targetFactId: uuid("target_fact_id").references(() => facts.id, {
     onDelete: "cascade",
   }),
+  /** Why the target changes, as the member said it (取代, 過時). */
+  reason: text("reason"),
+  /**
+   * When the change took effect (取代, 過時): the target's `valid_to` and the
+   * replacement's `valid_from` once confirmed.
+   */
+  effectiveAt: timestamp("effective_at", { withTimezone: true }),
+  /** Left unticked when the proposal was confirmed: it took no effect. */
+  excluded: boolean("excluded").notNull().default(false),
 });

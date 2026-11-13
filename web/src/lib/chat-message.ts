@@ -18,6 +18,19 @@ export interface Citation {
    * passage of the file it came from, labelled with that passage's path.
    */
   source?: { content: string; createdAt: string; label?: string };
+  /** A fact's versions, oldest first, ending with it; when it replaced one. */
+  history?: HistoryEntry[];
+}
+
+/** One version in a fact's history chain (e.g. 取代率 → 回收率 → 取代率). */
+export interface HistoryEntry {
+  factId: string;
+  content: string;
+  validFrom: string;
+  /** When the next version replaced it; null for the current one. */
+  validTo: string | null;
+  /** Why it replaced the version before it. */
+  reason?: string;
 }
 
 /** A 提案 as the chat shows it on its card (server/openapi.yaml's Proposal). */
@@ -26,14 +39,24 @@ export interface Proposal {
   status: "pending" | "confirmed" | "rejected";
   createdBy: string;
   createdAt: string;
+  /** 取代 and 過時 items first, then 新增 ones. */
   items: {
     id: string;
     kind: "add" | "supersede" | "obsolete";
-    factId: string;
-    content: string;
-    /** Once confirmed, an item left unticked is `rejected`. */
-    status: "pending" | "confirmed" | "rejected" | "expired";
+    /** The fact it adds (新增, 取代); absent for 過時. */
+    factId?: string;
+    content?: string;
+    /**
+     * 待確認 while the proposal is; once decided, whether the item took
+     * effect (`rejected` when the proposal was rejected or it was unticked).
+     */
+    status: "pending" | "confirmed" | "rejected";
     edited?: Edited;
+    /** The fact it replaces or marks 過時 (取代, 過時). */
+    target?: { factId: string; content: string; validFrom: string };
+    reason?: string;
+    /** When the change takes effect (取代, 過時). */
+    effectiveAt?: string;
   }[];
 }
 

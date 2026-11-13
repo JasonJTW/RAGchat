@@ -1,5 +1,5 @@
 {
-  "id": "240baf03-b9c5-4cbd-8b64-7c0b199b0d7d",
+  "id": "1d52756d-3a81-4153-8a3f-b11b85e6e15a",
   "prevId": "37d0a7b0-ff56-4180-be10-582abf460c7d",
   "version": "7",
   "dialect": "postgresql",
@@ -26,12 +26,6 @@
           "type": "uuid",
           "primaryKey": false,
           "notNull": true
-        },
-        "chunk_id": {
-          "name": "chunk_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
         },
         "content": {
           "name": "content",
@@ -100,6 +94,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "superseded_by": {
+          "name": "superseded_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -114,6 +114,21 @@
             },
             {
               "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "facts_superseded_by": {
+          "name": "facts_superseded_by",
+          "columns": [
+            {
+              "expression": "superseded_by",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -160,13 +175,13 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "facts_chunk_id_source_chunks_id_fk": {
-          "name": "facts_chunk_id_source_chunks_id_fk",
+        "facts_superseded_by_facts_id_fk": {
+          "name": "facts_superseded_by_facts_id_fk",
           "tableFrom": "facts",
-          "tableTo": "source_chunks",
-          "columnsFrom": ["chunk_id"],
+          "tableTo": "facts",
+          "columnsFrom": ["superseded_by"],
           "columnsTo": ["id"],
-          "onDelete": "cascade",
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -206,6 +221,13 @@
           "primaryKey": false,
           "notNull": true
         },
+        "position": {
+          "name": "position",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
         "fact_id": {
           "name": "fact_id",
           "type": "uuid",
@@ -215,6 +237,18 @@
         "target_fact_id": {
           "name": "target_fact_id",
           "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "effective_at": {
+          "name": "effective_at",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         }
@@ -348,141 +382,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.source_chunks": {
-      "name": "source_chunks",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "workspace_id": {
-          "name": "workspace_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "source_id": {
-          "name": "source_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "position": {
-          "name": "position",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "path": {
-          "name": "path",
-          "type": "text[]",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "content": {
-          "name": "content",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "embedding": {
-          "name": "embedding",
-          "type": "vector(1536)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "embedding_model": {
-          "name": "embedding_model",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "source_chunks_source": {
-          "name": "source_chunks_source",
-          "columns": [
-            {
-              "expression": "source_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "position",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "source_chunks_embedding": {
-          "name": "source_chunks_embedding",
-          "columns": [
-            {
-              "expression": "embedding",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last",
-              "opclass": "vector_cosine_ops"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "hnsw",
-          "with": {}
-        },
-        "source_chunks_content_trgm": {
-          "name": "source_chunks_content_trgm",
-          "columns": [
-            {
-              "expression": "content",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last",
-              "opclass": "gin_trgm_ops"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "gin",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "source_chunks_workspace_id_workspaces_id_fk": {
-          "name": "source_chunks_workspace_id_workspaces_id_fk",
-          "tableFrom": "source_chunks",
-          "tableTo": "workspaces",
-          "columnsFrom": ["workspace_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "source_chunks_source_id_sources_id_fk": {
-          "name": "source_chunks_source_id_sources_id_fk",
-          "tableFrom": "source_chunks",
-          "tableTo": "sources",
-          "columnsFrom": ["source_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.sources": {
       "name": "sources",
       "schema": "",
@@ -506,12 +405,6 @@
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
-        },
-        "filename": {
-          "name": "filename",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         },
         "content": {
           "name": "content",

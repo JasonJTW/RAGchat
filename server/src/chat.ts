@@ -16,7 +16,13 @@ export type { Citation } from "./agent/ask.js";
 /** The parts of an AI SDK UIMessage the chat reads. */
 export interface ChatMessage {
   role: string;
-  parts: { type: string; text?: string; filename?: string; url?: string }[];
+  parts: {
+    type: string;
+    text?: string;
+    data?: unknown;
+    filename?: string;
+    url?: string;
+  }[];
 }
 
 const DATA_URL = /^data:[^,]*;base64,([A-Za-z0-9+/=\s]*)$/;
@@ -44,7 +50,8 @@ export function attachedFiles(messages: ChatMessage[]): Upload[] | "invalid" {
 
 /**
  * Runs the agent on the latest user message and its attached files, and
- * streams its reply: an answer with citations, or proposal cards for input.
+ * streams its reply: an answer with citations, or proposal cards for input or a
+ * correction.
  */
 export function streamReply(
   res: Response,
@@ -55,6 +62,7 @@ export function streamReply(
   const turns = textTurns(messages);
   const message = turns.at(-1)?.role === "user" ? turns.pop()!.content : "";
   const attachments = files.length;
+  const cited = citedFacts(messages);
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
       const abort = new AbortController();
@@ -63,7 +71,7 @@ export function streamReply(
       writer.write({ type: "start" });
       try {
         for await (const chunk of await agent.stream(
-          { ...caller, turns, message, attachments, files },
+          { ...caller, turns, message, attachments, files, cited },
           { streamMode: "custom", signal: abort.signal },
         ))
           writer.write(chunk as UIMessageChunk);
@@ -85,6 +93,21 @@ export function streamReply(
     // Stops the Next.js rewrite proxy from gzipping the stream, which buffers
     // it until the answer is complete.
     headers: { "Cache-Control": "no-cache, no-transform" },
+  });
+}
+
+// The ids of the facts the latest answer cited, as its citation parts came
+// back from the client: unchecked, so the agent keeps only current facts of
+// the caller's workspace.
+function citedFacts(messages: ChatMessage[]): string[] {
+  const answer = [...messages].reverse().find((m) => m.role === "assistant");
+  return (answer?.parts ?? []).flatMap((part) => {
+    const data = part.data as { kind?: unknown; id?: unknown } | undefined;
+    return part.type === "data-citation" &&
+      data?.kind === "fact" &&
+      typeof data.id === "string"
+      ? [data.id]
+      : [];
   });
 }
 

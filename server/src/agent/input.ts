@@ -51,7 +51,7 @@ export const MAX_CHUNKS = 100;
 const EXTRACT_CONCURRENCY = 4;
 
 /** One input on its way to a proposal. */
-interface Draft {
+interface Input {
   source:
     | { kind: "message"; content: string }
     | { kind: "file"; filename: string; content: string };
@@ -68,7 +68,7 @@ export const InputState = Annotation.Root({
   message: Annotation<string>,
   /** Files to input; when there are any, the message is not a source. */
   files: Annotation<Upload[]>,
-  drafts: Annotation<Draft[]>,
+  inputs: Annotation<Input[]>,
   refusal: Annotation<Refusal | undefined>,
   proposals: Annotation<Proposal[]>,
   skipped: Annotation<Skipped[]>,
@@ -84,11 +84,11 @@ const FORMATS = SUPPORTED_FORMATS.map((f) => `.${f}`).join("、");
  */
 export async function toText(
   state: Pick<InputState, "message"> & Partial<Pick<InputState, "files">>,
-): Promise<Pick<InputState, "drafts" | "refusal">> {
+): Promise<Pick<InputState, "inputs" | "refusal">> {
   const files = state.files ?? [];
   if (files.length === 0)
     return {
-      drafts: [
+      inputs: [
         {
           source: { kind: "message", content: state.message },
           chunks: [],
@@ -107,7 +107,7 @@ export async function toText(
   if (large.length)
     return refuse("too large", `每個檔案最大 5 MB：${names(large)}。`);
   return {
-    drafts: await Promise.all(
+    inputs: await Promise.all(
       files.map(async (file) => ({
         source: {
           kind: "file" as const,
@@ -127,9 +127,9 @@ export async function toText(
  * input when it has over 100 passages.
  */
 export function chunk(
-  state: Pick<InputState, "drafts">,
-): Pick<InputState, "drafts" | "refusal"> {
-  const drafts = state.drafts.map((draft) =>
+  state: Pick<InputState, "inputs">,
+): Pick<InputState, "inputs" | "refusal"> {
+  const inputs = state.inputs.map((draft) =>
     draft.source.kind === "file"
       ? {
           ...draft,
@@ -137,13 +137,13 @@ export function chunk(
         }
       : draft,
   );
-  const count = drafts.reduce((n, draft) => n + draft.chunks.length, 0);
+  const count = inputs.reduce((n, draft) => n + draft.chunks.length, 0);
   if (count > MAX_CHUNKS)
     return refuse(
       "too long",
       `內容太長（${count} 段，上限 ${MAX_CHUNKS} 段），請分成幾個較小的檔案。`,
     );
-  return { drafts, refusal: undefined };
+  return { inputs, refusal: undefined };
 }
 
 const EXTRACT_PROMPT = `你負責把團隊成員要記進知識庫的內容拆成原子事實。
@@ -166,7 +166,7 @@ const HINTS = [
 ];
 
 /** The hint for a file whose name or opening shows a known kind. */
-function hintFor(source: Draft["source"]): string | undefined {
+function hintFor(source: Input["source"]): string | undefined {
   if (source.kind !== "file") return undefined;
   const signs = `${source.filename}\n${source.content.slice(0, 300)}`;
   return HINTS.find(({ kind }) => kind.test(signs))?.hint;
@@ -183,12 +183,12 @@ const Extraction = z.object({
  * the member wrote with the files goes along as context.
  */
 export async function extract(
-  state: Pick<InputState, "drafts"> &
+  state: Pick<InputState, "inputs"> &
     Partial<Pick<InputState, "message" | "files">>,
   config: NodeConfig = {},
-): Promise<Pick<InputState, "drafts">> {
+): Promise<Pick<InputState, "inputs">> {
   const note = state.files?.length ? inputBody(state.message ?? "") : "";
-  const units = state.drafts.flatMap(
+  const units = state.inputs.flatMap(
     (draft, d): { d: number; text: string; chunk?: number }[] =>
       draft.source.kind === "message"
         ? [{ d, text: inputBody(draft.source.content), chunk: undefined }]
@@ -199,7 +199,7 @@ export async function extract(
           })),
   );
   const found = await mapLimited(units, EXTRACT_CONCURRENCY, async (unit) => {
-    const hint = hintFor(state.drafts[unit.d].source);
+    const hint = hintFor(state.inputs[unit.d].source);
     const { facts } = Extraction.parse(
       await chatModel("extract")
         .withStructuredOutput(Extraction, { name: "extraction" })
@@ -216,7 +216,7 @@ export async function extract(
     return facts.map((fact) => fact.content.trim()).filter(Boolean);
   });
   return {
-    drafts: state.drafts.map((draft, d) => ({
+    inputs: state.inputs.map((draft, d) => ({
       ...draft,
       facts: units.flatMap((unit, u) =>
         unit.d === d
@@ -233,7 +233,7 @@ export async function extract(
  * the input was refused or a file gave nothing.
  */
 export async function propose(
-  state: Pick<InputState, "workspaceId" | "userId" | "drafts"> &
+  state: Pick<InputState, "workspaceId" | "userId" | "inputs"> &
     Partial<Pick<InputState, "refusal">>,
   config: NodeConfig = {},
 ): Promise<Pick<InputState, "proposals" | "skipped">> {
@@ -243,7 +243,7 @@ export async function propose(
   }
   const proposals: Proposal[] = [];
   const skipped: Skipped[] = [];
-  for (const [i, draft] of state.drafts.entries()) {
+  for (const [i, draft] of state.inputs.entries()) {
     const { source } = draft;
     const name = source.kind === "file" ? `${source.filename}：` : "";
     const id = `reply-${i}`;
@@ -316,7 +316,7 @@ export async function inputFiles(
 }
 
 function refuse(reason: Refusal["reason"], message: string) {
-  return { drafts: [], refusal: { reason, message } };
+  return { inputs: [], refusal: { reason, message } };
 }
 
 const names = (files: Upload[]) => files.map((f) => f.filename).join("、");

@@ -1,11 +1,12 @@
 import { Annotation, type LangGraphRunnableConfig } from "@langchain/langgraph";
 import type { UIMessageChunk } from "ai";
-import type { Proposal } from "../knowledge-base.js";
+import type { Fact, PendingChange, Proposal } from "../knowledge-base.js";
 import type { Citation, Evidence } from "./ask.js";
 import type { Skipped, Upload } from "./input.js";
+import type { CorrectionDraft } from "./correct.js";
 
 /** What a message asks of the agent. */
-export type Intent = "ask" | "input";
+export type Intent = "ask" | "input" | "correct";
 
 /** An earlier message of the conversation, as text. */
 export interface Turn {
@@ -25,11 +26,25 @@ export const AgentState = Annotation.Root({
   attachments: Annotation<number>,
   /** The files the latest user message attaches. */
   files: Annotation<Upload[]>,
+  /**
+   * The fact ids the latest answer cited, as the client sent them back;
+   * untrusted, so only current facts of the workspace count.
+   */
+  cited: Annotation<string[]>,
   intents: Annotation<Intent[]>,
   // 輸入 (the subgraph in input.ts keeps its own keys besides these)
   /** The proposals the input made, one per source. */
   proposals: Annotation<Proposal[]>,
   skipped: Annotation<Skipped[]>,
+  // 修正
+  /** The proposal the correction made. */
+  proposal: Annotation<Proposal | undefined>,
+  /** The current facts the correction may be about, the cited ones first. */
+  candidates: Annotation<Fact[]>,
+  /** The changes the correction asks for, one per target fact. */
+  drafts: Annotation<CorrectionDraft[]>,
+  /** Other pending proposals' changes to the drafts' target facts. */
+  conflicts: Annotation<PendingChange[]>,
   // 提問
   /** Whether to ask which subject a first question means instead of answering. */
   clarify: Annotation<boolean>,
