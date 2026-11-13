@@ -6,8 +6,8 @@ import {
 } from "@langchain/core/messages";
 import { noul } from "@typesafe-ai/sdk";
 import { retrieve as retrievePassages } from "../documents.js";
-import { searchFacts } from "../knowledge-base.js";
-import { chatModel, SYSTEM_ONE } from "../models.js";
+import { type Edited, searchFacts } from "../knowledge-base.js";
+import { chatModel, systemOne } from "../models.js";
 import { type NodeConfig, type State, type Turn, writeText } from "./state.js";
 
 // The 提問 branch: [Jev 檢查] and [檢索] side by side, then [回答＋引用].
@@ -20,6 +20,8 @@ export interface Evidence {
   label: string;
   /** The fact, or the passage's original text. */
   text: string;
+  /** Present when a member edited the fact's text inline (經編輯). */
+  edited?: Edited;
   /** A fact's source as given, shown when its citation is expanded. */
   source?: { content: string; createdAt: string };
 }
@@ -35,11 +37,9 @@ const EVIDENCE_PER_ANSWER = 6;
 // Dates as the team reads them: YYYY-MM-DD in Taiwan.
 const TEAM_DATE = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Taipei" });
 
-/** The fake support address the refusal points to (see the spec's Stubs). */
-const SUPPORT_EMAIL = "support@megaweaving.example";
-
-const REFUSAL_PHRASE = "這個問題我無法回答";
-const REFUSAL = `${REFUSAL_PHRASE}，請來信客服 ${SUPPORT_EMAIL}。`;
+// A member who knows the answer can record it in the same chat.
+const REFUSAL_PHRASE = "知識庫裡沒有這件事的資料";
+const REFUSAL = `${REFUSAL_PHRASE}。如果你知道，可以直接告訴我，我會整理成提案請團隊確認。`;
 
 // Below this cosine similarity between the question and its best-matching
 // evidence, nothing covers the question: refuse without calling the model.
@@ -48,7 +48,7 @@ const REFUSAL = `${REFUSAL_PHRASE}，請來信客服 ${SUPPORT_EMAIL}。`;
 // see the spec's 拒答規則).
 const MIN_SIMILARITY = 0.3;
 
-const SYSTEM_PROMPT = `你是「大量交織 megaweaving」的助理。
+const SYSTEM_PROMPT = `你是「大量交織 megaweaving」團隊 wiki 的助理，回答團隊成員的問題。
 - 一律用繁體中文回答，即使使用者用其他語言提問。
 - 只根據使用者訊息裡提供的段落作答，不要用段落以外的知識。標為「知識庫」的段落是團隊確認過的事實。
 - 先直接回答問題，再用一兩句補上段落裡跟答案同一處的關鍵細節：條件、材料、人數、年份、原因或出處（例如「不是原創」就說出它源自哪裡）。
@@ -63,37 +63,51 @@ const REWRITE_PROMPT = `把使用者的最新問題改寫成一句不需要上�
 - 一律用繁體中文。
 - 最新問題本身已經完整時，原樣輸出。`;
 
-// Asked of Jev about a first question. Validated in ticket 11 on the answer
-// key's first questions; the examples must stay clear of answer-key questions.
+// Asked of Jev about a first question. Validated on the team FAQ's first
+// questions (ticket #33); the examples must stay clear of those questions.
 const FIRST_QUESTION_CONTEXT =
-  "大量交織 megaweaving 客服聊天機器人收到的第一則訊息，之前沒有任何對話。機器人回答關於大量交織（理念、FB 社團、megaweaving.net 平台、交換規則、發起人蕭有志、各項計畫）的問題。";
+  "大量交織 megaweaving 團隊內部 wiki 聊天機器人收到的第一則訊息，之前沒有任何對話。團隊成員用它查詢團隊知識庫：各項計畫與功能、會議決議與理由、估算公式與方法、程式庫更新、分工與負責人、流程與時程。";
 const UNNAMED_SUBJECT = noul(
-  "這個問題問的是某個特定對象（計畫、活動、案例、物品等），但沒說出它的名稱，只用代名詞（它、那、這、其）指它，或直接省略主詞，所以不知道上文就無法知道在問什麼。",
+  "這個問題問的是某個特定對象（計畫、功能、會議、決議、公式、文件、人等），但沒說出它的名稱，只用代名詞（它、那、這、其）指它，或直接省略主詞，所以不知道上文就無法知道在問什麼。",
   {
-    true: "問題指向一個沒說出名稱的特定對象，例如「它的報名截止日是哪天？」「一共有幾個人參加？」",
+    true: "問題指向一個沒說出名稱的特定對象，例如「它的截止日是哪天？」「那後來誰負責？」「這個改了什麼？」",
     false:
-      "問題說出了要問的對象名稱，或問的是大量交織、megaweaving.net 平台、社團、交換規則本身的一般使用問題（例如「怎麼刪除自己的貼文？」「社團可以賣東西嗎？」），即使用了「這個」「那個」，後面也接著名稱",
+      "問題說出了要問的對象，用專有名稱或團隊裡通用的稱呼都算（例如「新版註冊流程什麼時候上線？」「上個月的會議決定了什麼？」「新人訓練要做哪些事？」），或問的是團隊整體的一般問題（例如「團隊多久開一次會？」），即使用了「這個」「那個」，後面也接著名稱",
   },
 );
-// From ticket 11: first questions that name their subject scored at most
-// 0.28, ones that don't at least 0.69 (one miss at 0.41).
-const ASK_WHICH_SUBJECT_AT = 0.5;
+// Ticket #33, on 10 named and 8 unnamed team first questions: named ones
+// scored at most 0.60 (most below 0.4), unnamed ones at least 0.83.
+const ASK_WHICH_SUBJECT_AT = 0.7;
 // Jev answers in ~0.2 s warm, ~0.4 s cold; past this the chat answers as usual.
 const JEV_DEADLINE_MS = 1_500;
 
 const CLARIFY = "請問你指的是哪個計畫或主題？";
 
+// A first message with one of these words records something rather than
+// asks (「記下…」「更新一下…」), so it is never asked which subject it means.
+// A question that merely mentions one goes unchecked and is answered.
+const INPUT_KEYWORD =
+  /輸入|記下|記錄|記住|寫入|存入|存進|新增|加入|更新|補充|更正|修正|改成|改為/;
+
 /**
- * Jev 檢查: whether a first question points at something it never names. No
- * JEV_API_KEY, a failure or no answer within the deadline counts as named;
- * a follow-up is never checked.
+ * Jev 檢查: whether a first question points at something it never names.
+ * Skipped, by rule, for a follow-up, a message with an attachment, and one
+ * with an input keyword. No JEV_API_KEY, a failure or no answer within the
+ * deadline counts as named.
  */
 export async function checkSubject(
-  state: Pick<State, "turns" | "message">,
+  state: Pick<State, "turns" | "message" | "attachments">,
 ): Promise<Pick<State, "clarify">> {
-  if (state.turns.length || !SYSTEM_ONE) return { clarify: false };
+  const jev = systemOne();
+  if (
+    !jev ||
+    state.turns.length ||
+    state.attachments ||
+    INPUT_KEYWORD.test(state.message)
+  )
+    return { clarify: false };
   try {
-    const { answers } = await SYSTEM_ONE.systemOne(
+    const { answers } = await jev.systemOne(
       {
         state: { context: FIRST_QUESTION_CONTEXT, question: state.message },
         questions: { unnamedSubject: UNNAMED_SUBJECT },
@@ -130,6 +144,7 @@ export async function retrieve(
         kind: "fact",
         label: `知識庫 · ${TEAM_DATE.format(new Date(fact.validFrom))}`,
         text: fact.content,
+        ...(fact.edited && { edited: fact.edited }),
         source: {
           content: fact.source.content,
           createdAt: fact.source.createdAt,

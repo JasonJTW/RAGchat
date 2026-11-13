@@ -31,7 +31,8 @@ test("an input is confirmed into the knowledge base, and the next answer cites i
   const reply = await send(page, INPUT);
 
   const card = reply.getByRole("region", { name: "提案" });
-  await expect(card.getByRole("listitem")).toHaveText([FACT]);
+  await expect(card.getByRole("listitem")).toHaveCount(1);
+  await expect(card.getByRole("listitem")).toContainText(FACT);
   await page.screenshot({ path: test.info().outputPath("proposal.png") });
   await card.getByRole("button", { name: "確認" }).click();
   await expect(card).toContainText("已確認");
@@ -63,4 +64,35 @@ test("a rejected input stays out of the knowledge base", async ({ page }) => {
   const { answer } = await askFollowUp(page, "週會是哪天？");
   // Earlier tests' confirmed facts may be cited; the rejected one never is.
   await expect(answer).not.toContainText(rejected);
+});
+
+test("an item edited on the card is confirmed as edited, and answers cite the edited text", async ({
+  page,
+}) => {
+  const extracted = "倉庫盤點改在每月第一個週六";
+  const edited = "倉庫盤點改在每月最後一個週六";
+  const reply = await send(page, `請把以下內容輸入到知識庫：${extracted}`);
+  const card = reply.getByRole("region", { name: "提案" });
+
+  await card.getByRole("button", { name: "編輯" }).click();
+  const text = card.getByRole("textbox", { name: "事實內容" });
+  await expect(text).toHaveValue(extracted);
+  await text.fill(edited);
+  await expect(card.getByText("已編輯")).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("editing.png") });
+  await card.getByRole("button", { name: "確認" }).click();
+  await expect(card).toContainText("已確認");
+  await expect(card.getByRole("listitem")).toContainText(edited);
+
+  const { answer } = await askFollowUp(page, "倉庫盤點是什麼時候？");
+
+  const citation = answer
+    .getByRole("list", { name: "出處" })
+    .getByRole("listitem")
+    .filter({ hasText: edited });
+  await citation.locator("summary").click();
+  await expect(citation.getByText(edited, { exact: true })).toBeVisible();
+  await expect(citation).toContainText("經 user_e2e_member 編輯");
+  await expect(citation.getByText(extracted, { exact: true })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("cited-edited.png") });
 });

@@ -81,6 +81,13 @@ export const facts = pgTable(
     recordedAt: timestamp("recorded_at", { withTimezone: true }),
     createdBy: text("created_by").notNull(),
     confirmedBy: text("confirmed_by"),
+    /**
+     * The text as extracted, kept when a member edited it inline on the
+     * proposal card; null while `content` is the extraction.
+     */
+    originalContent: text("original_content"),
+    /** Who edited it inline; null while unedited. */
+    editedBy: text("edited_by"),
   },
   (t) => [
     index("facts_workspace_status").on(t.workspaceId, t.status),

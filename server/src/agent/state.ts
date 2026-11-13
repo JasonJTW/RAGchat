@@ -20,6 +20,8 @@ export const AgentState = Annotation.Root({
   turns: Annotation<Turn[]>,
   /** The latest user message. */
   message: Annotation<string>,
+  /** How many files the latest user message attaches. */
+  attachments: Annotation<number>,
   intents: Annotation<Intent[]>,
   // 輸入
   /** The facts drawn from the message. */

@@ -77,15 +77,26 @@ declare global {
   var SYSTEM_ONE_CLIENT: SystemOne | undefined;
 }
 
-// Without JEV_API_KEY there is no client, and callers go on without Jev.
-// One attempt, no retries: the chat waits for Jev before it answers.
-export const SYSTEM_ONE: SystemOne | undefined =
-  globalThis.SYSTEM_ONE_CLIENT ??
-  (process.env.JEV_API_KEY
-    ? new TypeSafeClient({
-        apiKey: process.env.JEV_API_KEY,
+let client: { apiKey: string; jev: SystemOne } | undefined;
+
+/**
+ * Jev, or undefined without JEV_API_KEY (callers then go on without it).
+ * Like the models, the env is read on every call. One attempt, no retries:
+ * the chat waits for Jev before it answers.
+ */
+export function systemOne(): SystemOne | undefined {
+  if (globalThis.SYSTEM_ONE_CLIENT) return globalThis.SYSTEM_ONE_CLIENT;
+  const apiKey = env("JEV_API_KEY");
+  if (!apiKey) return undefined;
+  if (client?.apiKey !== apiKey)
+    client = {
+      apiKey,
+      jev: new TypeSafeClient({
+        apiKey,
         retry: { maxRetries: 0 },
         // Never "debug": request bodies hold the user's question.
         logLevel: "warn",
-      })
-    : undefined);
+      }),
+    };
+  return client.jev;
+}

@@ -11,6 +11,8 @@ export interface Citation {
   label: string;
   /** The fact, or the passage's original text, shown when expanded. */
   text: string;
+  /** Present when a 成員 edited the fact's text on its 提案 card. */
+  edited?: Edited;
   /** A fact's 來源 as it was given, shown when expanded. */
   source?: { content: string; createdAt: string };
 }
@@ -26,7 +28,14 @@ export interface Proposal {
     kind: "add" | "supersede" | "obsolete";
     factId: string;
     content: string;
+    edited?: Edited;
   }[];
+}
+
+/** A fact a 成員 edited inline: who, and the text as extracted. */
+export interface Edited {
+  by: string;
+  originalContent: string;
 }
 
 export type ChatMessage = UIMessage<

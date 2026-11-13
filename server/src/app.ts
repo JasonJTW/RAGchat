@@ -15,7 +15,12 @@ import {
   listDocuments,
   removeDocument,
 } from "./documents.js";
-import { confirmProposal, rejectProposal } from "./knowledge-base.js";
+import {
+  confirmProposal,
+  type DecisionError,
+  type Proposal,
+  rejectProposal,
+} from "./knowledge-base.js";
 import { callerOf, type Caller } from "./workspaces.js";
 
 export const app = express();
@@ -97,27 +102,51 @@ app.post("/api/chat", async (req, res) => {
   await streamReply(res, callerIn(res), body.data.messages);
 });
 
+const confirmBody = z
+  .object({
+    edits: z
+      .array(z.object({ itemId: z.string(), content: z.string().max(2000) }))
+      .max(100)
+      .default([]),
+  })
+  .default({ edits: [] });
+
 // Confirming is the one way facts enter the knowledge base; no model is
 // involved (ADR-0003).
-for (const [action, decide] of [
-  ["confirm", confirmProposal],
-  ["reject", rejectProposal],
-] as const)
-  app.post(`/api/proposals/:id/${action}`, async (req, res) => {
-    const { workspaceId, userId } = callerIn(res);
-    const result = await decide(workspaceId, req.params.id, userId);
-    if (result === "not found") {
-      res.status(404).json({ error: "proposal not found" });
-      return;
-    }
-    if (result === "already decided") {
-      res
-        .status(409)
-        .json({ error: "proposal was already confirmed or rejected" });
-      return;
-    }
+app.post("/api/proposals/:id/confirm", async (req, res) => {
+  const body = confirmBody.safeParse(req.body);
+  if (!body.success) {
+    res.status(400).json({ error: INVALID_EDIT });
+    return;
+  }
+  const { workspaceId, userId } = callerIn(res);
+  sendDecision(
+    res,
+    await confirmProposal(workspaceId, req.params.id, userId, body.data.edits),
+  );
+});
+
+app.post("/api/proposals/:id/reject", async (req, res) => {
+  const { workspaceId, userId } = callerIn(res);
+  sendDecision(res, await rejectProposal(workspaceId, req.params.id, userId));
+});
+
+const INVALID_EDIT =
+  "edits must name items of this proposal, each with a text of 1 to 2000 characters";
+
+function sendDecision(res: express.Response, result: Proposal | DecisionError) {
+  if (result === "not found") {
+    res.status(404).json({ error: "proposal not found" });
+  } else if (result === "already decided") {
+    res
+      .status(409)
+      .json({ error: "proposal was already confirmed or rejected" });
+  } else if (result === "invalid edit") {
+    res.status(400).json({ error: INVALID_EDIT });
+  } else {
     res.json(result);
-  });
+  }
+}
 
 app.get("/api/documents", (_req, res) => {
   res.json(listDocuments());

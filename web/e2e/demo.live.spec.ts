@@ -142,9 +142,8 @@ const MARKDOWN = [
 
 const OTHERS = ["04-founder-hsiao-yu-chih.pdf", "faq.txt", "pickup-notice.txt"];
 
-const REFUSAL = "這個問題我無法回答";
+const REFUSAL = "知識庫裡沒有這件事的資料";
 const CLARIFY = "請問你指的是哪個計畫或主題？";
-const SUPPORT = "support@megaweaving.example";
 
 // The answer key's normalisation: no thousands separators, dates as
 // YYYY-MM-DD, 五站 = 5 站; plus no whitespace and lowercase.
@@ -219,14 +218,13 @@ function citesMatch(label: string, location: string): boolean {
   return label.startsWith(file) && headings.every((h) => label.includes(h));
 }
 
-/** `refuses`: the refusal and the support address, no citations. */
+/** `refuses`: the refusal, no citations. */
 async function expectRefuses(id: string, reply: Answer) {
   const { answer, text } = reply;
   note(`${id} answer`, text);
   await answer.screenshot({ path: path.join(EVIDENCE, `${id}.png`) });
   expect(text).not.toBe(CLARIFY);
   expect(text).toContain(REFUSAL);
-  expect(text).toContain(SUPPORT);
   await expect(answer.getByRole("list", { name: "出處" })).toHaveCount(0);
   note(`${id} citations`, "none");
   // A refusal may arrive in one piece (the threshold skips the model), so

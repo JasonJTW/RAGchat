@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { confirmProposal, propose, rejectProposal } from "../knowledge-base.js";
 import { installStubModels } from "../stub-models.js";
 import { createWorkspace } from "../workspaces.js";
-import { answer, retrieve, type Evidence } from "./ask.js";
+import { answer, checkSubject, retrieve, type Evidence } from "./ask.js";
 
 const FORMULA = "避免排放算法模型是 估算值 A = m × EF × 取代率 R × 壽命比 L";
 const MESSAGE = `請把以下內容輸入到知識庫：${FORMULA}`;
@@ -77,6 +77,70 @@ describe("retrieve", () => {
   });
 });
 
+describe("checkSubject", () => {
+  const first = (message: string, attachments = 0) => ({
+    turns: [],
+    message,
+    attachments,
+  });
+
+  it("asks Jev about a first question in the team wiki's context", async () => {
+    const { jev } = installStubModels();
+    jev.noul = 0.9;
+
+    const out = await checkSubject(first("它的截止日是哪天？"));
+
+    expect(out).toEqual({ clarify: true });
+    const state = JSON.stringify(jev.states[0]);
+    expect(state).toContain("它的截止日是哪天？");
+    expect(state).toContain("團隊");
+    expect(state).not.toContain("客服");
+  });
+
+  it.each([
+    "記下：週會改到每週四下午",
+    "幫我記下這件事，週會改到每週四",
+    "更新一下，避免排放公式加上了壽命比 L",
+    "請輸入以下會議結論",
+    "新增一條：地圖可以用半徑篩選",
+    "補充：試辦計畫已經結束",
+  ])("skips Jev for a first message that inputs: %s", async (message) => {
+    const { jev } = installStubModels();
+    jev.noul = 0.9;
+
+    const out = await checkSubject(first(message));
+
+    expect(out).toEqual({ clarify: false });
+    expect(jev.states).toEqual([]);
+  });
+
+  it("skips Jev for a first message with an attachment", async () => {
+    const { jev } = installStubModels();
+    jev.noul = 0.9;
+
+    const out = await checkSubject(first("這是上週的會議紀錄", 1));
+
+    expect(out).toEqual({ clarify: false });
+    expect(jev.states).toEqual([]);
+  });
+
+  it("skips Jev for a follow-up", async () => {
+    const { jev } = installStubModels();
+    jev.noul = 0.9;
+
+    const out = await checkSubject({
+      ...first("它是哪年開始的？"),
+      turns: [
+        { role: "user", content: "避免排放怎麼算？" },
+        { role: "assistant", content: "A = W × EF × R。[1]" },
+      ],
+    });
+
+    expect(out).toEqual({ clarify: false });
+    expect(jev.states).toEqual([]);
+  });
+});
+
 describe("answer", () => {
   const fact: Evidence = {
     id: "f1",
@@ -133,7 +197,9 @@ describe("answer", () => {
 
     const out = await answer({ ...state, similarity: 0.1 });
 
-    expect(out.reply).toContain("這個問題我無法回答");
+    expect(out.reply).toBe(
+      "知識庫裡沒有這件事的資料。如果你知道，可以直接告訴我，我會整理成提案請團隊確認。",
+    );
     expect(out.citations).toEqual([]);
     expect(chat.prompts).toEqual([]);
   });
