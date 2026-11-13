@@ -18,7 +18,7 @@ test("a visitor who is not signed in reaches no knowledge base API", async ({
 }) => {
   const chat = await page.request.post("/api/chat", { data: { messages: [] } });
   expect(chat.status()).toBe(401);
-  expect((await page.request.get("/api/documents")).status()).toBe(401);
+  expect((await page.request.post("/api/sources")).status()).toBe(401);
   expect(
     (
       await page.request.post(

@@ -1,48 +1,92 @@
+import { getEncoding } from "js-tiktoken";
+import mammoth from "mammoth";
 import { getDocument, VerbosityLevel } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { chunkMarkdown, type Chunk } from "./markdown-chunks.js";
 
-// Chunks an uploaded file by its extension. A chunk's path is what its
-// citation shows after the filename: the markdown heading path, the PDF page,
-// or the opening of a txt paragraph.
+// An uploaded file as a 來源: its text (轉文字), then its passages (切 chunk),
+// by extension. A chunk's path is what its citation shows after the
+// filename: the markdown heading path, the PDF page, or the opening of a txt
+// or docx paragraph.
+
+export type { Chunk } from "./markdown-chunks.js";
 
 const MAX_TOKENS = 800; // per PDF chunk, page prefix included, as for markdown
 const SENTENCES_PER_CHUNK_CHARS = 300; // txt paragraphs without blank lines
 const OPENING_CHARS = 40; // a txt chunk's path
 
-const SUPPORTED = ["md", "pdf", "txt"];
+/** The formats a 來源 file may have. */
+export const SUPPORTED_FORMATS = ["md", "txt", "pdf", "docx"];
+
+// A PDF's pages are separated by a form feed, as pdftotext does.
+const PAGE_BREAK = "\f";
+
+const encoding = getEncoding("cl100k_base");
+const countTokens = (text: string) => encoding.encode(text).length;
 
 const extensionOf = (filename: string) =>
   filename.toLowerCase().split(".").pop();
 
-/** Whether chunkDocument can read the file: markdown, PDF, or txt. */
+/** Whether the file can be read: markdown, txt, PDF or docx. */
 export function isSupported(filename: string): boolean {
-  return SUPPORTED.includes(extensionOf(filename) ?? "");
+  return SUPPORTED_FORMATS.includes(extensionOf(filename) ?? "");
 }
 
-export async function chunkDocument(
+/**
+ * 轉文字: the file's text. A PDF's is its text layer, pages separated by a
+ * form feed; a scan, a broken PDF or a broken docx has none (""). Check
+ * `isSupported` first.
+ */
+export async function fileText(
   filename: string,
   bytes: Buffer,
-  countTokens: (text: string) => number,
-): Promise<Chunk[]> {
+): Promise<string> {
   const extension = extensionOf(filename);
-  if (extension === "md")
-    return chunkMarkdown(filename, bytes.toString("utf8"), countTokens);
-  if (extension === "txt") return chunkText(filename, bytes.toString("utf8"));
-  if (extension === "pdf") return chunkPdf(filename, bytes, countTokens);
-  throw new Error(`unsupported format: ${filename}`); // check isSupported first
+  if (extension === "md" || extension === "txt")
+    return bytes.toString("utf8").replace(/\r\n?/g, "\n");
+  if (extension === "pdf") return (await pdfPages(bytes)).join(PAGE_BREAK);
+  if (extension === "docx") {
+    try {
+      return (await mammoth.extractRawText({ buffer: bytes })).value;
+    } catch {
+      return "";
+    }
+  }
+  throw new Error(`unsupported format: ${filename}`);
+}
+
+/**
+ * 切 chunk: the passages of a file's text, as `fileText` gave it. Markdown is
+ * split by heading, a PDF by page, txt and docx by Q/A pair or paragraph.
+ */
+export function chunkSource(filename: string, text: string): Chunk[] {
+  const extension = extensionOf(filename);
+  if (extension === "md") {
+    const chunks = chunkMarkdown(filename, text, countTokens);
+    // A file too short to keep a chunk of is one chunk.
+    const content = text.trim();
+    return chunks.length || !content
+      ? chunks
+      : [
+          {
+            path: [filename],
+            content,
+            embedText: `${filename}\n\n${content}`,
+            metadata: {},
+          },
+        ];
+  }
+  if (extension === "pdf") return chunkPdf(filename, text.split(PAGE_BREAK));
+  return chunkText(filename, text);
 }
 
 /**
  * One chunk per page of the PDF's text layer; a page over the token limit is
  * split by whole lines into even parts. A PDF without a text layer (a scan) has no chunks.
  */
-async function chunkPdf(
-  filename: string,
-  bytes: Buffer,
-  countTokens: (text: string) => number,
-): Promise<Chunk[]> {
+function chunkPdf(filename: string, pages: string[]): Chunk[] {
   const chunks: Chunk[] = [];
-  for (const [i, text] of (await pdfPages(bytes)).entries()) {
+  for (const [i, text] of pages.entries()) {
+    if (!text.trim()) continue;
     const path = [filename, `第 ${i + 1} 頁`];
     const prefix = `${path.join(" › ")}\n\n`;
     // Even parts, so an over-long page leaves no few-word scrap.
@@ -102,7 +146,7 @@ async function pdfPages(bytes: Buffer): Promise<string[]> {
  * paragraph, long paragraphs split by sentence.
  */
 function chunkText(filename: string, text: string): Chunk[] {
-  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const lines = text.split("\n");
   const isQuestion = (line: string) => /^Q[:：]/.test(line.trim());
   let pieces: string[];
   if (lines.some(isQuestion)) {

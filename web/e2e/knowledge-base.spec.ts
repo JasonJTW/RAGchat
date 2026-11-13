@@ -1,5 +1,4 @@
 import { expect, test, type Page } from "@playwright/test";
-import { openDocuments, removeAllDocuments } from "./documents";
 import { askFollowUp } from "./ask";
 
 const FACT =
@@ -19,9 +18,6 @@ async function send(page: Page, text: string) {
 }
 
 test.beforeEach(async ({ page }) => {
-  // Only the knowledge base answers: earlier tests' documents are removed.
-  await openDocuments(page);
-  await removeAllDocuments(page);
   await page.goto("/");
 });
 

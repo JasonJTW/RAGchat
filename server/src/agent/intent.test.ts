@@ -20,6 +20,14 @@ describe("classifyIntent", () => {
   });
 });
 
+describe("classifyIntent with attachments", () => {
+  it("takes a message with files as input, whatever it says", () => {
+    expect(classifyIntent({ message: "它是什麼？", attachments: 1 })).toEqual({
+      intents: ["input"],
+    });
+  });
+});
+
 describe("inputBody", () => {
   it("drops the instruction, keeping the content", () => {
     expect(

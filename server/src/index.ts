@@ -2,8 +2,7 @@ import { authWarnings } from "./auth.js";
 import { migrate } from "./db.js";
 
 // E2E runs without a model key: STUB_MODELS=1 swaps the AI Gateway for fixed
-// fake embeddings. Installed before the app loads, since loading the document
-// store may re-embed.
+// fake models. Installed before the app loads.
 if (process.env.STUB_MODELS === "1") {
   const { installStubModels } = await import("./stub-models.js");
   installStubModels();

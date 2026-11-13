@@ -1,29 +1,49 @@
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import request from "supertest";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Citation } from "./chat.js";
-import { stubSession } from "./stub-auth.js";
 import { installStubModels } from "./stub-models.js";
+import { createWorkspace, type Caller } from "./workspaces.js";
+
+// Each test is a 成員 in a workspace of its own (see proposals.test.ts).
+const caller = vi.hoisted(() => ({ current: undefined as unknown as Caller }));
+vi.mock("./workspaces.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./workspaces.js")>()),
+  callerOf: () => Promise.resolve(caller.current),
+}));
 
 const asMember = (app: Parameters<typeof request.agent>[0]) =>
-  request.agent(app).set("Cookie", stubSession("user_member", "member"));
+  request.agent(app);
 
 const FIXTURES = path.join(
   import.meta.dirname,
   "../../.scratch/kb-chatbot/fixtures/upload",
 );
 
-/** Starts the app fresh with only 05-projects-and-practice.md uploaded. */
+beforeEach(async () => {
+  caller.current = {
+    workspaceId: await createWorkspace("guest", "chat test"),
+    userId: "user_member",
+  };
+});
+
+/**
+ * Starts the app fresh, its knowledge base holding only
+ * 05-projects-and-practice.md, uploaded and confirmed: its passages and the
+ * facts drawn from them (one per sentence, by the stub model).
+ */
 async function startServerWithUpload() {
-  vi.stubEnv("DATA_DIR", mkdtempSync(path.join(tmpdir(), "kb-chat-test-")));
   vi.resetModules();
   const { app } = await import("./app.js");
+  const { inputFiles } = await import("./agent/input.js");
+  const { confirmProposal } = await import("./knowledge-base.js");
   const name = "05-projects-and-practice.md";
-  await asMember(app)
-    .post("/api/documents")
-    .attach("files", readFileSync(path.join(FIXTURES, name)), name);
+  const { workspaceId, userId } = caller.current;
+  const { proposals } = await inputFiles(workspaceId, userId, [
+    { filename: name, bytes: readFileSync(path.join(FIXTURES, name)) },
+  ]);
+  await confirmProposal(workspaceId, proposals[0].id, userId);
   return app;
 }
 
@@ -86,7 +106,6 @@ describe("POST /api/chat", () => {
 
   it("accepts an earlier answer over 2,000 characters in the history", async () => {
     installStubModels();
-    vi.stubEnv("DATA_DIR", mkdtempSync(path.join(tmpdir(), "kb-chat-test-")));
     vi.resetModules();
     const { app } = await import("./app.js");
     const res = await asMember(app)
@@ -153,7 +172,7 @@ describe("POST /api/chat", () => {
     expect(new Set(deltas.map((p) => p.id)).size).toBe(1);
   });
 
-  it("cites only the passages the answer marks, as numbered in the prompt", async () => {
+  it("cites only the evidence the answer marks, as numbered in the prompt", async () => {
     const { chat } = installStubModels();
     chat.reply = "旅梯計畫巡迴了 5 站。[2]";
     const app = await startServerWithUpload();
@@ -166,8 +185,7 @@ describe("POST /api/chat", () => {
     expect(citations).toHaveLength(1);
     const [citation] = citations;
     expect(citation.marker).toBe(2);
-    expect(citation.label).toMatch(/^05-projects-and-practice\.md › /);
-    // The cited text is the second passage the model was given.
+    // The cited text is the second piece of evidence the model was given.
     const [prompt] = chat.prompts;
     const at = prompt.indexOf(citation.text);
     expect(at).toBeGreaterThan(prompt.indexOf("[2]"));

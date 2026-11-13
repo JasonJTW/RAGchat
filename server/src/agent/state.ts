@@ -2,6 +2,7 @@ import { Annotation, type LangGraphRunnableConfig } from "@langchain/langgraph";
 import type { UIMessageChunk } from "ai";
 import type { Proposal } from "../knowledge-base.js";
 import type { Citation, Evidence } from "./ask.js";
+import type { Skipped, Upload } from "./input.js";
 
 /** What a message asks of the agent. */
 export type Intent = "ask" | "input";
@@ -22,11 +23,13 @@ export const AgentState = Annotation.Root({
   message: Annotation<string>,
   /** How many files the latest user message attaches. */
   attachments: Annotation<number>,
+  /** The files the latest user message attaches. */
+  files: Annotation<Upload[]>,
   intents: Annotation<Intent[]>,
-  // 輸入
-  /** The facts drawn from the message. */
-  extracted: Annotation<string[]>,
-  proposal: Annotation<Proposal | undefined>,
+  // 輸入 (the subgraph in input.ts keeps its own keys besides these)
+  /** The proposals the input made, one per source. */
+  proposals: Annotation<Proposal[]>,
+  skipped: Annotation<Skipped[]>,
   // 提問
   /** Whether to ask which subject a first question means instead of answering. */
   clarify: Annotation<boolean>,

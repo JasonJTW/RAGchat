@@ -5,14 +5,13 @@ import {
   SystemMessage,
 } from "@langchain/core/messages";
 import { noul } from "@typesafe-ai/sdk";
-import { retrieve as retrievePassages } from "../documents.js";
-import { type Edited, searchFacts } from "../knowledge-base.js";
+import { type Edited, searchChunks, searchFacts } from "../knowledge-base.js";
 import { chatModel, systemOne } from "../models.js";
 import { type NodeConfig, type State, type Turn, writeText } from "./state.js";
 
 // The 提問 branch: [Jev 檢查] and [檢索] side by side, then [回答＋引用].
 
-/** Something an answer may draw on: a fact or a document passage. */
+/** Something an answer may draw on: a fact or a passage of a file source. */
 export interface Evidence {
   id: string;
   kind: "fact" | "passage";
@@ -22,8 +21,11 @@ export interface Evidence {
   text: string;
   /** Present when a member edited the fact's text inline (經編輯). */
   edited?: Edited;
-  /** A fact's source as given, shown when its citation is expanded. */
-  source?: { content: string; createdAt: string };
+  /**
+   * A fact's source as given, shown when its citation is expanded: the
+   * message, or the passage of a file it came from, with that passage's label.
+   */
+  source?: { content: string; createdAt: string; label?: string };
 }
 
 /** Evidence an answer cites, as shown under the answer. */
@@ -32,7 +34,10 @@ export interface Citation extends Evidence {
   marker: number;
 }
 
-const EVIDENCE_PER_ANSWER = 6;
+// An answer draws on the best facts, and on the best passages of file
+// sources for the context facts leave out (e.g. a decision's reasoning).
+const FACTS_PER_ANSWER = 6;
+const PASSAGES_PER_ANSWER = 2;
 
 // Dates as the team reads them: YYYY-MM-DD in Taiwan.
 const TEAM_DATE = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Taipei" });
@@ -122,9 +127,10 @@ export async function checkSubject(
 }
 
 /**
- * 檢索: the workspace's current confirmed facts and the stored document
- * passages that best match the question, merged best first. A follow-up is
- * first rewritten into a standalone question.
+ * 檢索: the workspace's current confirmed facts (at most 6) and the passages
+ * of its confirmed file sources (at most 2) that best match the question,
+ * merged best first. A follow-up is first rewritten into a standalone
+ * question.
  */
 export async function retrieve(
   state: Pick<State, "workspaceId" | "turns" | "message">,
@@ -132,9 +138,9 @@ export async function retrieve(
   const query = state.turns.length
     ? await standaloneQuestion(state.turns, state.message)
     : state.message;
-  const [facts, { passages }] = await Promise.all([
-    searchFacts(state.workspaceId, query, EVIDENCE_PER_ANSWER),
-    retrievePassages(query, EVIDENCE_PER_ANSWER),
+  const [facts, passages] = await Promise.all([
+    searchFacts(state.workspaceId, query, FACTS_PER_ANSWER),
+    searchChunks(state.workspaceId, query, PASSAGES_PER_ANSWER),
   ]);
   const scored: { similarity: number; evidence: Evidence }[] = facts.map(
     (fact) => ({
@@ -148,12 +154,13 @@ export async function retrieve(
         source: {
           content: fact.source.content,
           createdAt: fact.source.createdAt,
+          ...(fact.source.label && { label: fact.source.label }),
         },
       },
     }),
   );
-  // Passages keep their hybrid-search order; each fact goes before the first
-  // passage it matches better than.
+  // Passages keep their fused (vector + keyword) order; each fact goes
+  // before the first passage it matches better than.
   const merged: typeof scored = [];
   let f = 0;
   for (const passage of passages) {
@@ -164,16 +171,14 @@ export async function retrieve(
       evidence: {
         id: passage.id,
         kind: "passage",
-        label: passage.label,
-        text: passage.text,
+        label: passage.path.join(" › "),
+        text: passage.content,
       },
     });
   }
   merged.push(...scored.slice(f));
   return {
-    evidence: merged
-      .slice(0, EVIDENCE_PER_ANSWER)
-      .map(({ evidence }) => evidence),
+    evidence: merged.map(({ evidence }) => evidence),
     similarity: Math.max(0, ...merged.map((item) => item.similarity)),
   };
 }

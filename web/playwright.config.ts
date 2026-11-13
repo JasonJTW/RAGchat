@@ -1,6 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parseEnv } from "node:util";
 import { defineConfig, devices } from "@playwright/test";
@@ -42,7 +41,8 @@ export default defineConfig({
   testDir: "./e2e",
   // Live tests (tagged @live) call the real LLM; run them with `npm run test:live`.
   grepInvert: process.env.LIVE ? undefined : /@live/,
-  // Tests share one stateful server (the document list), so run them one at a time.
+  // Tests share one stateful server (the team workspace's knowledge base), so
+  // run them one at a time.
   workers: 1,
   forbidOnly: !!process.env.CI,
   // Live answers vary run to run: about 1 in 25 takes over 5 s to its first
@@ -71,8 +71,6 @@ export default defineConfig({
         // Sign-in is faked by a cookie (e2e/sign-in.ts), never real Clerk,
         // live runs included. A Clerk key would turn the stub off.
         ...STUB_AUTH,
-        // A fresh, empty document store per run, never the dev server/data/.
-        DATA_DIR: mkdtempSync(path.join(tmpdir(), "kb-e2e-")),
         // The full suite must not reach a real model: blank the keys and use
         // fake models unless running live tests. (Shell env wins over the
         // root .env file.)
