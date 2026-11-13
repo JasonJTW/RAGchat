@@ -43,9 +43,9 @@ paths:
   /api/chat:
     post:
       operationId: postChat
-      summary: Answer a question, or propose the facts of an input
+      summary: Answer a question, or propose the facts of an input or a correction
       description: >
-        The latest user message is either input or a question. A message that
+        The latest user message is input, a correction or a question. A message that
         opens with an instruction to record what follows (e.g.
         「請把以下內容輸入到知識庫：…」, 「記下：…」) is input: it is stored as
         a 來源, its atomic facts are extracted by the extract model, and the
@@ -53,6 +53,22 @@ paths:
         pending Proposal. Nothing enters the knowledge base until a member
         confirms the proposal with `POST /api/proposals/{id}/confirm`; no
         reply of the chat writes to it.
+
+        A message that says something is not so, was changed, or no longer
+        applies (e.g. 「R 不是取代率，是回收率」, 「…改成…」, 「…已經過時了」,
+        「更正：…」) and does not end in a question mark is a correction. The
+        facts it may be about are the current facts the latest assistant
+        message cited (its `data-citation` parts of kind `fact`, sent back
+        with the history; ids that are not current facts of the caller's
+        workspace are ignored), then the facts most similar to it, at most 6.
+        The extract model picks from those by number which facts the
+        correction replaces (取代, with the new text) or marks 過時 (no
+        replacement), with a reason and the date it took effect (no date:
+        now; kept between the fact's valid-from and now). The reply is a
+        short text and a `data-proposal` part with 取代 and 過時 items; when
+        other pending proposals already change the same fact, the text says
+        so. When no fact is meant, the reply says it found none and proposes
+        nothing. Nothing changes until the proposal is confirmed.
 
         Any other message is a question, answered from the workspace's
         current confirmed facts (vector search) and the uploaded documents'
@@ -196,7 +212,11 @@ paths:
         Items edited inline on the card are sent as `edits`: each such fact
         takes the edited text (trimmed), embedded anew, and keeps the text
         as extracted and the caller as its editor (`edited`). An edit whose
-        text equals the item's changes nothing.
+        text equals the item's changes nothing; a 過時 item adds no fact and
+        can't be edited. Each fact a 取代 or 過時 item targets leaves the
+        knowledge base as of the item's `effectiveAt` (its valid-to), kept
+        in history; a 取代 item's fact becomes its `supersededBy`, so the
+        replaced versions show in the citation's `history`.
       parameters:
         - $ref: "#/components/parameters/ProposalId"
       requestBody:
@@ -244,7 +264,14 @@ paths:
         "404":
           $ref: "#/components/responses/ProposalNotFound"
         "409":
-          $ref: "#/components/responses/ProposalDecided"
+          description: >
+            The proposal was already confirmed or rejected, or a fact it
+            replaces or marks 過時 is no longer current (another proposal
+            changed it first); nothing is decided
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/proposals/{id}/reject:
     post:
       operationId: rejectProposal
@@ -505,6 +532,14 @@ components:
           description: The fact, or the passage's original text
         edited:
           $ref: "#/components/schemas/Edited"
+        history:
+          type: array
+          description: >
+            A fact's history chain, oldest first, ending with the cited fact
+            (e.g. 取代率 → 回收率 → 取代率); present only when it replaced
+            another
+          items:
+            $ref: "#/components/schemas/HistoryEntry"
         source:
           type: object
           description: A fact's 來源 as it was given; absent for passages
@@ -536,9 +571,10 @@ components:
           format: date-time
         items:
           type: array
+          description: 取代 and 過時 items first, then 新增 ones
           items:
             type: object
-            required: [id, kind, factId, content]
+            required: [id, kind]
             properties:
               id:
                 type: string
@@ -546,15 +582,57 @@ components:
               kind:
                 type: string
                 enum: [add, supersede, obsolete]
-                description: 新增, 取代 or 過時; only `add` so far
+                description: 新增, 取代 or 過時
               factId:
                 type: string
                 format: uuid
-                description: The fact the item adds
+                description: The fact the item adds (新增, 取代); absent for 過時
               content:
                 type: string
+                description: That fact's text; absent for 過時
               edited:
                 $ref: "#/components/schemas/Edited"
+              target:
+                type: object
+                description: The fact it replaces or marks 過時 (取代, 過時)
+                required: [factId, content, validFrom]
+                properties:
+                  factId:
+                    type: string
+                    format: uuid
+                  content:
+                    type: string
+                  validFrom:
+                    type: string
+                    format: date-time
+              reason:
+                type: string
+                description: Why the target changes (取代, 過時)
+              effectiveAt:
+                type: string
+                format: date-time
+                description: >
+                  When the change takes effect (取代, 過時): the target's
+                  valid-to and the replacement's valid-from once confirmed
+    HistoryEntry:
+      type: object
+      required: [factId, content, validFrom, validTo]
+      properties:
+        factId:
+          type: string
+          format: uuid
+        content:
+          type: string
+        validFrom:
+          type: string
+          format: date-time
+        validTo:
+          type: [string, "null"]
+          format: date-time
+          description: When the next version replaced it; null for the current one
+        reason:
+          type: string
+          description: Why it replaced the version before it; absent for the first
     Edited:
       type: object
       description: >

@@ -18,12 +18,12 @@ export type { Citation } from "./agent/ask.js";
 /** The parts of an AI SDK UIMessage the chat reads. */
 export interface ChatMessage {
   role: string;
-  parts: { type: string; text?: string }[];
+  parts: { type: string; text?: string; data?: unknown }[];
 }
 
 /**
  * Runs the agent on the latest user message and streams its reply: an answer
- * with citations, or a proposal card for input. With a conversation id, the
+ * with citations, or a proposal card for input or a correction. With a conversation id, the
  * messages and the reply are saved as the caller's conversation before the
  * response ends (also when the client leaves mid-reply); the caller must be
  * allowed to continue it (see conversations.ts).
@@ -41,6 +41,7 @@ export function streamReply(
     latest?.role === "user"
       ? latest.parts.filter((part) => part.type === "file").length
       : 0;
+  const cited = citedFacts(messages);
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
       const abort = new AbortController();
@@ -49,7 +50,7 @@ export function streamReply(
       writer.write({ type: "start" });
       try {
         for await (const chunk of await agent.stream(
-          { ...caller, turns, message, attachments },
+          { ...caller, turns, message, attachments, cited },
           { streamMode: "custom", signal: abort.signal },
         ))
           writer.write(chunk as UIMessageChunk);
@@ -78,6 +79,21 @@ export function streamReply(
     // Stops the Next.js rewrite proxy from gzipping the stream, which buffers
     // it until the answer is complete.
     headers: { "Cache-Control": "no-cache, no-transform" },
+  });
+}
+
+// The ids of the facts the latest answer cited, as its citation parts came
+// back from the client: unchecked, so the agent keeps only current facts of
+// the caller's workspace.
+function citedFacts(messages: ChatMessage[]): string[] {
+  const answer = [...messages].reverse().find((m) => m.role === "assistant");
+  return (answer?.parts ?? []).flatMap((part) => {
+    const data = part.data as { kind?: unknown; id?: unknown } | undefined;
+    return part.type === "data-citation" &&
+      data?.kind === "fact" &&
+      typeof data.id === "string"
+      ? [data.id]
+      : [];
   });
 }
 

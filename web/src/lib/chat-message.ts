@@ -15,6 +15,19 @@ export interface Citation {
   edited?: Edited;
   /** A fact's 來源 as it was given, shown when expanded. */
   source?: { content: string; createdAt: string };
+  /** A fact's versions, oldest first, ending with it; when it replaced one. */
+  history?: HistoryEntry[];
+}
+
+/** One version in a fact's history chain (e.g. 取代率 → 回收率 → 取代率). */
+export interface HistoryEntry {
+  factId: string;
+  content: string;
+  validFrom: string;
+  /** When the next version replaced it; null for the current one. */
+  validTo: string | null;
+  /** Why it replaced the version before it. */
+  reason?: string;
 }
 
 /** A 提案 as the chat shows it on its card (server/openapi.yaml's Proposal). */
@@ -23,12 +36,19 @@ export interface Proposal {
   status: "pending" | "confirmed" | "rejected";
   createdBy: string;
   createdAt: string;
+  /** 取代 and 過時 items first, then 新增 ones. */
   items: {
     id: string;
     kind: "add" | "supersede" | "obsolete";
-    factId: string;
-    content: string;
+    /** The fact it adds (新增, 取代); absent for 過時. */
+    factId?: string;
+    content?: string;
     edited?: Edited;
+    /** The fact it replaces or marks 過時 (取代, 過時). */
+    target?: { factId: string; content: string; validFrom: string };
+    reason?: string;
+    /** When the change takes effect (取代, 過時). */
+    effectiveAt?: string;
   }[];
 }
 

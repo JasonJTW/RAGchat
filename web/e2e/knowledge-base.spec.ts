@@ -1,22 +1,10 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { openDocuments, removeAllDocuments } from "./documents";
-import { askFollowUp } from "./ask";
+import { askFollowUp, send } from "./ask";
 
 const FACT =
   "我們目前的避免排放算法模型是 估算值 A = m × EF × 取代率 R × 壽命比 L";
 const INPUT = `請把以下內容輸入到知識庫：${FACT}`;
-
-/** Sends a message in the conversation on the page; returns its reply. */
-async function send(page: Page, text: string) {
-  const replies = page.getByRole("article", { name: "回答" });
-  const earlier = await replies.count();
-  await page.getByRole("textbox", { name: "問題" }).fill(text);
-  await page.getByRole("button", { name: "送出" }).click();
-  await expect(page.getByRole("button", { name: "送出" })).toBeEnabled({
-    timeout: 30_000,
-  });
-  return replies.nth(earlier);
-}
 
 test.beforeEach(async ({ page }) => {
   // Only the knowledge base answers: earlier tests' documents are removed.

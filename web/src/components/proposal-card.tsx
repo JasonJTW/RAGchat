@@ -4,6 +4,9 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import type { Proposal } from "@/lib/chat-message";
+import { teamDate } from "@/lib/team-date";
+
+const KIND = { add: "新增", supersede: "取代", obsolete: "過時" } as const;
 
 const DECIDED = {
   confirmed: "已確認，已寫入知識庫。",
@@ -13,9 +16,11 @@ const DECIDED = {
 type Item = Proposal["items"][number];
 
 /**
- * A 提案 waiting for a member: its facts, each editable inline, and buttons
- * that confirm (with the edited texts) or reject it over REST. Nothing
- * enters the knowledge base until 確認.
+ * A 提案 waiting for a member: its items, and buttons that confirm (with the
+ * edited texts) or reject it over REST. A 新增 item shows its fact; a 取代
+ * item the old and the new fact side by side; a 過時 item the fact it ends;
+ * each change with its reason and the date it takes effect. Each new fact is
+ * editable inline. Nothing changes in the knowledge base until 確認.
  */
 export function ProposalCard({ proposal }: { proposal: Proposal }) {
   const [decided, setDecided] = useState<Proposal>(proposal);
@@ -26,7 +31,7 @@ export function ProposalCard({ proposal }: { proposal: Proposal }) {
 
   const edits = proposal.items.flatMap((item) => {
     const text = texts[item.id];
-    return text !== undefined && text.trim() !== item.content
+    return item.factId && text !== undefined && text.trim() !== item.content
       ? [{ itemId: item.id, content: text }]
       : [];
   });
@@ -59,28 +64,46 @@ export function ProposalCard({ proposal }: { proposal: Proposal }) {
       aria-label="提案"
       className="mt-2 rounded-md border bg-zinc-50 p-3"
     >
-      <h2 className="text-sm font-medium text-zinc-600">提案 · 新增</h2>
-      <ul className="mt-2 list-disc space-y-1 pl-5">
-        {(pending ? proposal.items : decided.items).map((item) =>
-          pending ? (
-            <EditableItem
-              key={item.id}
-              item={item}
-              text={texts[item.id]}
-              disabled={busy}
-              onChange={(text) => setTexts({ ...texts, [item.id]: text })}
-            />
-          ) : (
-            <li key={item.id}>
-              {item.content}
-              {item.edited && (
-                <span className="ml-2 text-xs text-zinc-500">
-                  經 {item.edited.by} 編輯
-                </span>
-              )}
-            </li>
-          ),
-        )}
+      <h2 className="text-sm font-medium text-zinc-600">
+        提案 ·{" "}
+        {[...new Set(proposal.items.map((item) => KIND[item.kind]))].join("、")}
+      </h2>
+      <ul className="mt-2 list-disc space-y-2 pl-5">
+        {(pending ? proposal.items : decided.items).map((item) => (
+          <li key={item.id}>
+            {item.target && (
+              <Labelled label={item.kind === "obsolete" ? "過時" : "舊"}>
+                <del>{item.target.content}</del>
+              </Labelled>
+            )}
+            {item.factId &&
+              (pending ? (
+                <EditableFact
+                  item={item}
+                  text={texts[item.id]}
+                  disabled={busy}
+                  onChange={(text) => setTexts({ ...texts, [item.id]: text })}
+                />
+              ) : (
+                <Labelled label={item.target ? "新" : undefined}>
+                  {item.content}
+                  {item.edited && (
+                    <span className="ml-2 text-xs text-zinc-500">
+                      經 {item.edited.by} 編輯
+                    </span>
+                  )}
+                </Labelled>
+              ))}
+            {item.target && (
+              <p className="text-xs text-zinc-500">
+                {item.reason && <>原因：{item.reason} · </>}
+                {item.effectiveAt && (
+                  <>生效日期：{teamDate(item.effectiveAt)}</>
+                )}
+              </p>
+            )}
+          </li>
+        ))}
       </ul>
       {decided.status === "pending" ? (
         <div className="mt-3 flex gap-2">
@@ -113,10 +136,32 @@ export function ProposalCard({ proposal }: { proposal: Proposal }) {
 }
 
 /**
- * One pending item: its text, or once 編輯 is pressed a box to change it.
- * `text` is undefined until the member starts editing.
+ * One line of an item, e.g. 舊 or 新 on a 取代 item; `label` names it for
+ * the eye and for assistive tech. Without a label, just the content.
  */
-function EditableItem({
+function Labelled({
+  label,
+  children,
+}: {
+  label: string | undefined;
+  children: React.ReactNode;
+}) {
+  if (!label) return <div>{children}</div>;
+  return (
+    <div className="flex gap-2">
+      <span aria-hidden className="shrink-0 text-xs text-zinc-500">
+        {label}
+      </span>
+      <span aria-label={label}>{children}</span>
+    </div>
+  );
+}
+
+/**
+ * The new fact of a pending item: its text, or once 編輯 is pressed a box to
+ * change it. `text` is undefined until the member starts editing.
+ */
+function EditableFact({
   item,
   text,
   disabled,
@@ -127,24 +172,24 @@ function EditableItem({
   disabled: boolean;
   onChange: (text: string) => void;
 }) {
+  const label = item.target ? "新" : undefined;
   if (text === undefined)
     return (
-      <li>
-        {item.content}
+      <div className="flex items-center gap-2">
+        <Labelled label={label}>{item.content}</Labelled>
         <Button
           type="button"
           variant="ghost"
           size="sm"
-          className="ml-2"
           disabled={disabled}
-          onClick={() => onChange(item.content)}
+          onClick={() => onChange(item.content ?? "")}
         >
           編輯
         </Button>
-      </li>
+      </div>
     );
   return (
-    <li>
+    <div>
       <Textarea
         aria-label="事實內容"
         value={text}
@@ -158,6 +203,6 @@ function EditableItem({
           {text.trim() ? "已編輯" : "內容不可空白"}
         </span>
       )}
-    </li>
+    </div>
   );
 }

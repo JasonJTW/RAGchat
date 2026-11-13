@@ -10,6 +10,18 @@ export async function ask(page: Page, question: string) {
   return askFollowUp(page, question);
 }
 
+/** Sends a message in the conversation on the page; returns its reply. */
+export async function send(page: Page, text: string) {
+  const replies = page.getByRole("article", { name: "回答" });
+  const earlier = await replies.count();
+  await page.getByRole("textbox", { name: "問題" }).fill(text);
+  await page.getByRole("button", { name: "送出" }).click();
+  await expect(page.getByRole("button", { name: "送出" })).toBeEnabled({
+    timeout: 30_000,
+  });
+  return replies.nth(earlier);
+}
+
 /** Like `ask`, but in the conversation already on the page. */
 export async function askFollowUp(page: Page, question: string) {
   const answers = page.getByRole("article", { name: "回答" });

@@ -21,11 +21,12 @@ export interface StubChat {
   /** Each rewrite prompt, flattened like `prompts`. */
   rewritePrompts: string[];
   /**
-   * Answers `withStructuredOutput(...).invoke(messages)` with the last
-   * message's text. By default it extracts facts: each sentence (split at 。
-   * and line breaks) is one fact.
+   * Answers `withStructuredOutput(schema, { name }).invoke(messages)` from
+   * the last message's text. By default, for the name "correction" it
+   * corrects as `stubCorrections` does; otherwise it extracts facts: each
+   * sentence (split at 。 and line breaks) is one fact.
    */
-  structured: (text: string) => unknown;
+  structured: (text: string, name?: string) => unknown;
   /** Each structured-output prompt, flattened like `prompts`. */
   structuredPrompts: string[];
 }
@@ -68,7 +69,8 @@ export function installStubModels(): {
     prompts: [],
     rewrite: STUB_CHAT_REWRITE,
     rewritePrompts: [],
-    structured: sentencesAsFacts,
+    structured: (text, name) =>
+      name === "correction" ? stubCorrections(text) : sentencesAsFacts(text),
     structuredPrompts: [],
   };
   const vectors = new Map<string, number[]>();
@@ -125,10 +127,10 @@ class StubChatModel extends BaseChatModel {
 
   // The real models answer in a given shape by tool calling; this one asks
   // `chat.structured`.
-  override withStructuredOutput() {
+  override withStructuredOutput(_schema: unknown, options?: { name?: string }) {
     return RunnableLambda.from((messages: BaseMessage[]) => {
       this.chat.structuredPrompts.push(flatten(messages));
-      return this.chat.structured(messages.at(-1)?.text ?? "");
+      return this.chat.structured(messages.at(-1)?.text ?? "", options?.name);
     }) as unknown as ReturnType<BaseChatModel["withStructuredOutput"]>;
   }
 
@@ -202,6 +204,56 @@ function sentencesAsFacts(text: string) {
       .map((sentence) => sentence.trim())
       .filter(Boolean)
       .map((content) => ({ content })),
+  };
+}
+
+/**
+ * The default correction, read from 起草修正's message (agent/correct.ts):
+ * 「X 不是 A，是 B」 replaces A with B in the first listed fact that mentions
+ * both X and A; a message saying a fact is 過時 or no longer used marks the
+ * first listed fact mentioning its subject 過時. Anything else corrects
+ * nothing.
+ */
+function stubCorrections(text: string) {
+  const facts = [...text.matchAll(/^\[(\d+)\] (.*)$/gm)].map(
+    ([, n, content]) => ({ n: Number(n), content }),
+  );
+  const message = /成員的更正：([\s\S]*)$/.exec(text)?.[1].trim() ?? "";
+  const replaced = /^(.+?)不是(.+?)[，,]\s*(?:而)?是(.+?)[。.]?$/.exec(message);
+  if (replaced) {
+    const [, subject, from, to] = replaced.map((part) => part.trim());
+    const fact = facts.find(
+      (f) => f.content.includes(subject) && f.content.includes(from),
+    );
+    return {
+      corrections: fact
+        ? [
+            {
+              fact: fact.n,
+              kind: "supersede",
+              content: fact.content.replaceAll(from, to),
+              reason: message,
+              effectiveDate: null,
+            },
+          ]
+        : [],
+    };
+  }
+  const obsolete = /^(.+?)(?:已經|已)?(?:過時|不再使用)/.exec(message);
+  const fact =
+    obsolete && facts.find((f) => f.content.includes(obsolete[1].trim()));
+  return {
+    corrections: fact
+      ? [
+          {
+            fact: fact.n,
+            kind: "obsolete",
+            content: null,
+            reason: message,
+            effectiveDate: null,
+          },
+        ]
+      : [],
   };
 }
 

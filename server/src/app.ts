@@ -176,6 +176,11 @@ function sendDecision(res: express.Response, result: Proposal | DecisionError) {
     res
       .status(409)
       .json({ error: "proposal was already confirmed or rejected" });
+  } else if (result === "target changed") {
+    res.status(409).json({
+      error:
+        "a fact this proposal changes was replaced or marked obsolete since it was proposed",
+    });
   } else if (result === "invalid edit") {
     res.status(400).json({ error: INVALID_EDIT });
   } else {
