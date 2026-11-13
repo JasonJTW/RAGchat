@@ -15,6 +15,22 @@ export interface ProposalItem {
   /** The fact it adds. */
   factId: string;
   content: string;
+  /** Present when a member edited the fact's text inline. */
+  edited?: Edited;
+}
+
+/** A fact a member edited inline on its proposal card. */
+export interface Edited {
+  /** The member who edited it. */
+  by: string;
+  /** The text as extracted, before the edit. */
+  originalContent: string;
+}
+
+/** An item's text as a member edited it on the card, sent with 確認. */
+export interface ItemEdit {
+  itemId: string;
+  content: string;
 }
 
 /** A proposal as shown on its card and returned by the proposal routes. */
@@ -33,6 +49,8 @@ export interface FactMatch {
   validFrom: string;
   /** Cosine similarity of the fact to the query. */
   similarity: number;
+  /** Present when a member edited the fact's text inline. */
+  edited?: Edited;
   /** The source the fact was drawn from, as given. */
   source: { id: string; content: string; createdAt: string };
 }
@@ -102,19 +120,37 @@ export async function propose(
   });
 }
 
-/** Why a proposal could not be confirmed or rejected. */
-export type DecisionError = "not found" | "already decided";
+/**
+ * Why a proposal could not be confirmed or rejected. An edit is invalid when
+ * its item is not the proposal's or its text is blank.
+ */
+export type DecisionError = "not found" | "already decided" | "invalid edit";
 
 /**
  * Confirms a pending proposal: its facts enter the knowledge base, recorded
- * now and confirmed by the user.
+ * now and confirmed by the user. An edited item's fact takes the edited text,
+ * embedded anew, and keeps the extraction and the editor; an edit that
+ * leaves the text as it is changes nothing.
  */
-export function confirmProposal(
+export async function confirmProposal(
   workspaceId: string,
   proposalId: string,
   userId: string,
+  edits: ItemEdit[] = [],
 ): Promise<Proposal | DecisionError> {
-  return decide(workspaceId, proposalId, userId, "confirmed");
+  const texts = edits.map((edit) => edit.content.trim());
+  if (texts.some((text) => !text)) return "invalid edit";
+  // Embedded before the proposal is locked, so the lock never waits on the
+  // embedding model.
+  const model = embeddings();
+  const vectors = texts.length ? await model.embedDocuments(texts) : [];
+  const edited = edits.map((edit, i) => ({
+    itemId: edit.itemId,
+    content: texts[i],
+    embedding: vectors[i],
+    embeddingModel: model.model,
+  }));
+  return decide(workspaceId, proposalId, userId, "confirmed", edited);
 }
 
 /** Rejects a pending proposal: none of its facts enter the knowledge base. */
@@ -131,6 +167,12 @@ async function decide(
   proposalId: string,
   userId: string,
   status: "confirmed" | "rejected",
+  edits: {
+    itemId: string;
+    content: string;
+    embedding: number[];
+    embeddingModel: string;
+  }[] = [],
 ): Promise<Proposal | DecisionError> {
   if (!isUuid(proposalId)) return "not found";
   return db.transaction(async (tx) => {
@@ -147,20 +189,39 @@ async function decide(
       .for("update");
     if (!proposal) return "not found";
     if (proposal.status !== "pending") return "already decided";
+    const items = await tx
+      .select({
+        id: proposalItems.id,
+        kind: proposalItems.kind,
+        factId: proposalItems.factId,
+        content: facts.content,
+      })
+      .from(proposalItems)
+      .innerJoin(facts, eq(facts.id, proposalItems.factId))
+      .where(eq(proposalItems.proposalId, proposalId));
+    const itemOf = new Map(items.map((item) => [item.id, item]));
+    if (edits.some((edit) => !itemOf.has(edit.itemId))) return "invalid edit";
+    for (const edit of edits) {
+      const item = itemOf.get(edit.itemId)!;
+      if (edit.content === item.content) continue;
+      await tx
+        .update(facts)
+        .set({
+          content: edit.content,
+          embedding: edit.embedding,
+          embeddingModel: edit.embeddingModel,
+          // The first edit's text before it is the extraction.
+          originalContent: sql`coalesce(${facts.originalContent}, ${facts.content})`,
+          editedBy: userId,
+        })
+        .where(eq(facts.id, item.factId!));
+    }
     const now = new Date();
     const [decided] = await tx
       .update(proposals)
       .set({ status, decidedBy: userId, decidedAt: now })
       .where(eq(proposals.id, proposalId))
       .returning();
-    const items = await tx
-      .select({
-        id: proposalItems.id,
-        kind: proposalItems.kind,
-        factId: proposalItems.factId,
-      })
-      .from(proposalItems)
-      .where(eq(proposalItems.proposalId, proposalId));
     const changed = await tx
       .update(facts)
       .set(
@@ -174,19 +235,28 @@ async function decide(
           sql`${facts.id} in (select ${proposalItems.factId} from ${proposalItems} where ${proposalItems.proposalId} = ${proposalId})`,
         ),
       )
-      .returning({ id: facts.id, content: facts.content });
-    const contentOf = new Map(changed.map((fact) => [fact.id, fact.content]));
+      .returning({
+        id: facts.id,
+        content: facts.content,
+        originalContent: facts.originalContent,
+        editedBy: facts.editedBy,
+      });
+    const factOf = new Map(changed.map((fact) => [fact.id, fact]));
     return {
       id: decided.id,
       status: decided.status,
       createdBy: decided.createdBy,
       createdAt: decided.createdAt.toISOString(),
-      items: items.map((item) => ({
-        id: item.id,
-        kind: item.kind,
-        factId: item.factId!,
-        content: contentOf.get(item.factId!) ?? "",
-      })),
+      items: items.map((item) => {
+        const fact = factOf.get(item.factId!);
+        return {
+          id: item.id,
+          kind: item.kind,
+          factId: item.factId!,
+          content: fact?.content ?? "",
+          ...editedOf(fact),
+        };
+      }),
     };
   });
 }
@@ -210,6 +280,8 @@ export async function searchFacts(
       content: facts.content,
       validFrom: facts.validFrom,
       similarity,
+      originalContent: facts.originalContent,
+      editedBy: facts.editedBy,
       sourceId: sources.id,
       sourceContent: sources.content,
       sourceCreatedAt: sources.createdAt,
@@ -231,12 +303,21 @@ export async function searchFacts(
     content: row.content,
     validFrom: row.validFrom.toISOString(),
     similarity: Number(row.similarity),
+    ...editedOf(row),
     source: {
       id: row.sourceId,
       content: row.sourceContent,
       createdAt: row.sourceCreatedAt.toISOString(),
     },
   }));
+}
+
+function editedOf(
+  fact: { originalContent: string | null; editedBy: string | null } | undefined,
+): { edited?: Edited } {
+  return fact?.originalContent != null && fact.editedBy != null
+    ? { edited: { by: fact.editedBy, originalContent: fact.originalContent } }
+    : {};
 }
 
 function isUuid(id: string) {
