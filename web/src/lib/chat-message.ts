@@ -5,9 +5,9 @@ export interface Citation {
   id: string;
   /** The `[n]` the answer marks it with. */
   marker: number;
-  /** A confirmed 事實 of the knowledge base, or a passage of a document. */
+  /** A 事實 (confirmed, or 待確認 with `proposal`), or a passage of a document. */
   kind: "fact" | "passage";
-  /** e.g. "知識庫 · 2026-11-14", or "05-projects-and-practice.md › 05 實踐案例 … › C. 移動微型空間計畫" */
+  /** e.g. "知識庫 · 2026-11-14", "待確認 · 2026-11-14", or "05-projects-and-practice.md › 05 實踐案例 … › C. 移動微型空間計畫" */
   label: string;
   /** The fact, or the passage's original text, shown when expanded. */
   text: string;
@@ -17,6 +17,10 @@ export interface Citation {
   source?: { content: string; createdAt: string };
   /** A fact's versions, oldest first, ending with it; when it replaced one. */
   history?: HistoryEntry[];
+  /** Present when the fact is 待確認: the 提案 it belongs to, to confirm here. */
+  proposal?: Proposal;
+  /** A 待確認 fact's: the confirmed fact it would replace, cited before it. */
+  replaces?: string;
 }
 
 /** One version in a fact's history chain (e.g. 取代率 → 回收率 → 取代率). */

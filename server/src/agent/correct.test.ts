@@ -49,7 +49,7 @@ describe("locateTargets", () => {
 
     const { candidates } = await locateTargets({
       workspaceId,
-      message: "R 不是取代率，是回收率",
+      correction: "R 不是取代率，是回收率",
       cited: [meeting],
     });
 
@@ -64,7 +64,7 @@ describe("locateTargets", () => {
 
     const { candidates } = await locateTargets({
       workspaceId,
-      message: "L 不是壽命比，是使用年限比",
+      correction: "L 不是壽命比，是使用年限比",
       cited: [r, "not-an-id", mine],
     });
 
@@ -74,7 +74,7 @@ describe("locateTargets", () => {
   it("finds nothing in an empty knowledge base", async () => {
     const { candidates } = await locateTargets({
       workspaceId,
-      message: "R 不是取代率，是回收率",
+      correction: "R 不是取代率，是回收率",
       cited: [],
     });
 
@@ -108,7 +108,7 @@ describe("draftCorrection", () => {
     });
 
     const { drafts } = await draftCorrection({
-      message: "L 上週一就改成使用年限比了",
+      correction: "L 上週一就改成使用年限比了",
       candidates: [R, L],
     });
 
@@ -143,7 +143,7 @@ describe("draftCorrection", () => {
     const before = Date.now();
 
     const { drafts } = await draftCorrection({
-      message: "R 這個係數已經不再使用了",
+      correction: "R 這個係數已經不再使用了",
       candidates: [R, L],
     });
 
@@ -181,7 +181,7 @@ describe("draftCorrection", () => {
     const before = Date.now();
 
     const { drafts } = await draftCorrection({
-      message: "R 和 L 都過時了",
+      correction: "R 和 L 都過時了",
       candidates: [R, L],
     });
 
@@ -234,7 +234,7 @@ describe("draftCorrection", () => {
     });
 
     const { drafts } = await draftCorrection({
-      message: "L 改成使用年限比",
+      correction: "L 改成使用年限比",
       candidates: [R, L],
     });
 
@@ -245,7 +245,7 @@ describe("draftCorrection", () => {
 
   it("drafts nothing, without asking the model, when no fact could be meant", async () => {
     const { drafts } = await draftCorrection({
-      message: "R 不是取代率，是回收率",
+      correction: "R 不是取代率，是回收率",
       candidates: [],
     });
 

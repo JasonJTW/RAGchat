@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { confirmProposal, propose, rejectProposal } from "../knowledge-base.js";
+import {
+  confirmProposal,
+  propose,
+  type Proposal,
+  rejectProposal,
+} from "../knowledge-base.js";
 import { installStubModels } from "../stub-models.js";
 import { createWorkspace } from "../workspaces.js";
 import { answer, checkSubject, retrieve, type Evidence } from "./ask.js";
@@ -45,7 +50,7 @@ describe("retrieve", () => {
     expect(similarity).toBeGreaterThan(0.3);
   });
 
-  it("finds no fact of a proposal that is pending or rejected", async () => {
+  it("finds a pending proposal's fact only as 待確認, after the confirmed ones, and no rejected one", async () => {
     installStubModels();
     const workspaceId = await createWorkspace("guest", "test");
     const pending = await propose(workspaceId, "user-a", {
@@ -63,7 +68,57 @@ describe("retrieve", () => {
     );
 
     expect(pending.status).toBe("pending");
-    expect(evidence.filter((e) => e.kind === "fact")).toEqual([]);
+    expect(evidence.filter((e) => e.kind === "fact")).toEqual([
+      expect.objectContaining({
+        text: FORMULA,
+        proposal: expect.objectContaining({ id: pending.id }) as unknown,
+      }),
+    ]);
+  });
+
+  it("puts a 待確認 replacement right after the confirmed fact it would replace, bringing that one in if missing", async () => {
+    const { vectors } = installStubModels();
+    const OLD = "R 代表取代率";
+    const NEW = "R 代表回收率";
+    const OTHERS = ["一", "二", "三", "四", "五", "六"].map(
+      (day) => `週會在每週${day}`,
+    );
+    vectors.set(OLD, [0, 1]);
+    for (const other of OTHERS) vectors.set(other, [1, 0]);
+    vectors.set(NEW, [0.9, 0.1]);
+    vectors.set("R 代表什麼？", [0.3, 0.95]);
+    vectors.set("週會在哪天？", [1, 0]);
+    const workspaceId = await workspaceWith(OLD, ...OTHERS);
+    const [old] = (await retrieve(ask(workspaceId, OLD))).evidence;
+    const correction = await propose(workspaceId, "user-a", {
+      source: { kind: "message", content: "R 不是取代率，是回收率" },
+      facts: [],
+      corrections: [
+        {
+          kind: "supersede",
+          targetFactId: old.id,
+          content: NEW,
+          reason: "改了",
+          effectiveAt: new Date().toISOString(),
+        },
+      ],
+    });
+
+    const found = await retrieve(ask(workspaceId, "R 代表什麼？"));
+    expect(found.evidence.map((e) => e.text).slice(0, 2)).toEqual([OLD, NEW]);
+    expect(found.evidence[1]).toMatchObject({
+      label: expect.stringMatching(/^待確認 · /) as unknown,
+      replaces: old.id,
+      proposal: { id: correction.id },
+    });
+
+    // Six other facts match better: the target is brought in for its rival.
+    const missing = await retrieve(ask(workspaceId, "週會在哪天？"));
+    const texts = missing.evidence.map((e) => e.text);
+    expect(texts.slice(0, 6).sort()).toEqual([...OTHERS].sort());
+    expect(texts.slice(6)).toEqual([OLD, NEW]);
+    expect(missing.evidence[6]).toMatchObject({ id: old.id, kind: "fact" });
+    expect(missing.evidence[6]).not.toHaveProperty("proposal");
   });
 
   it("finds no fact of another workspace", async () => {
@@ -156,6 +211,41 @@ describe("answer", () => {
     evidence: [fact],
     similarity: 0.8,
   };
+
+  it("notes a correction proposed in the same turn is pending, also when it refuses", async () => {
+    installStubModels();
+    const proposal = { id: "p1" } as Proposal;
+
+    const answered = await answer({ ...state, proposal });
+    const refused = await answer({ ...state, similarity: 0, proposal });
+
+    for (const { reply } of [answered, refused])
+      expect(reply).toMatch(/你剛提出的修正還待確認[^\n]*$/);
+    expect(refused.reply).toContain("知識庫裡沒有這件事的資料");
+  });
+
+  it("cites a 待確認 fact together with the confirmed one it would replace, the confirmed first", async () => {
+    const { chat } = installStubModels();
+    chat.reply = "待確認的說法是回收率。[2]";
+    const pending: Evidence = {
+      ...fact,
+      id: "f2",
+      label: "待確認 · 2026-11-14",
+      text: "R 是回收率",
+      proposal: { id: "p1" } as Proposal,
+      replaces: "f1",
+    };
+
+    const { citations } = await answer({
+      ...state,
+      evidence: [fact, pending],
+    });
+
+    expect(citations.map((c) => [c.id, c.marker])).toEqual([
+      ["f1", 1],
+      ["f2", 2],
+    ]);
+  });
 
   it("answers from the evidence, citing what the answer marks", async () => {
     const { chat } = installStubModels();

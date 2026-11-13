@@ -34,6 +34,8 @@ export const AgentState = Annotation.Root({
   extracted: Annotation<string[]>,
   proposal: Annotation<Proposal | undefined>,
   // 修正
+  /** The part of the message that corrects: all of it, or what precedes its question. */
+  correction: Annotation<string>,
   /** The current facts the correction may be about, the cited ones first. */
   candidates: Annotation<Fact[]>,
   /** The changes the correction asks for, one per target fact. */

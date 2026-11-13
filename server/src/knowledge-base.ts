@@ -821,6 +821,112 @@ export async function searchFacts(
   });
 }
 
+/**
+ * A 待確認 fact that matches a query: the fact of a live item of a pending
+ * proposal, not yet in the knowledge base.
+ */
+export interface PendingFactMatch {
+  id: string;
+  content: string;
+  validFrom: string;
+  /** Cosine similarity of the fact to the query. */
+  similarity: number;
+  /** The member whose input proposed it. */
+  createdBy: string;
+  /** Present when a member edited the fact's text inline. */
+  edited?: Edited;
+  /** The source the fact was drawn from, as given. */
+  source: { id: string; content: string; createdAt: string };
+  /** The current fact it would replace (取代); absent for 新增. */
+  replaces?: Fact;
+  /** Its proposal, as the card shows it, to confirm it from the answer. */
+  proposal: Proposal;
+}
+
+/**
+ * The 待確認 facts most similar to the query, best first: those of the
+ * pending proposals' items that haven't expired. A 取代's target is given
+ * while it is still current. Facts embedded by another model than
+ * EMBEDDING_MODEL are skipped.
+ */
+export async function searchPendingFacts(
+  workspaceId: string,
+  query: string,
+  limit: number,
+): Promise<PendingFactMatch[]> {
+  const model = embeddings();
+  const vector = await model.embedQuery(query);
+  const target = alias(facts, "target");
+  const similarity = sql<number>`1 - (${cosineDistance(facts.embedding, vector)})`;
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .select({
+        id: facts.id,
+        content: facts.content,
+        validFrom: facts.validFrom,
+        similarity,
+        createdBy: facts.createdBy,
+        originalContent: facts.originalContent,
+        editedBy: facts.editedBy,
+        sourceId: sources.id,
+        sourceContent: sources.content,
+        sourceCreatedAt: sources.createdAt,
+        targetId: target.id,
+        targetContent: target.content,
+        targetValidFrom: target.validFrom,
+        proposal: proposals,
+      })
+      .from(facts)
+      .innerJoin(sources, eq(sources.id, facts.sourceId))
+      .innerJoin(proposalItems, eq(proposalItems.factId, facts.id))
+      .innerJoin(proposals, eq(proposals.id, proposalItems.proposalId))
+      .leftJoin(
+        target,
+        and(
+          eq(target.id, proposalItems.targetFactId),
+          eq(target.status, "confirmed"),
+          isNull(target.validTo),
+        ),
+      )
+      .where(
+        and(
+          eq(facts.workspaceId, workspaceId),
+          eq(facts.status, "pending"),
+          eq(facts.embeddingModel, model.model),
+          eq(proposals.status, "pending"),
+          isNull(proposalItems.expiredBy),
+        ),
+      )
+      .orderBy(cosineDistance(facts.embedding, vector))
+      .limit(limit);
+    const cards = new Map<string, Proposal>();
+    for (const row of rows)
+      if (!cards.has(row.proposal.id))
+        cards.set(row.proposal.id, await cardOf(tx, workspaceId, row.proposal));
+    return rows.map((row) => ({
+      id: row.id,
+      content: row.content,
+      validFrom: row.validFrom.toISOString(),
+      similarity: Number(row.similarity),
+      createdBy: row.createdBy,
+      ...editedOf(row),
+      source: {
+        id: row.sourceId,
+        content: row.sourceContent,
+        createdAt: row.sourceCreatedAt.toISOString(),
+      },
+      ...(row.targetId != null && {
+        replaces: {
+          id: row.targetId,
+          content: row.targetContent ?? "",
+          validFrom: (row.targetValidFrom ?? new Date(0)).toISOString(),
+        },
+      }),
+      proposal: cards.get(row.proposal.id)!,
+    }));
+  });
+}
+
 // How far back a history chain is followed; a guard, never reached in use.
 const MAX_HISTORY = 50;
 
