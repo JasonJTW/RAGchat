@@ -15,6 +15,7 @@
 
 ## Conventions
 
+- Sign-in: the server asks `identify(req)` / `callerOf(req)` (`server/src/auth.ts`, `server/src/workspaces.ts`); knowledge base routes go through `requireMember` in `app.ts`. Tests and E2E fake Clerk with `STUB_AUTH=1` and a `stub_session` cookie (`stubSession()` in `server/src/stub-auth.ts`, `signIn()` in `web/e2e/sign-in.ts`; E2E specs start signed in as a 成員).
 - Tests sit next to the code as `*.test.ts(x)`. Server tests import `app` from `server/src/app.ts` and hit it with supertest; `server/src/index.ts` only calls `listen`.
 - E2E specs live in `web/e2e/*.spec.ts`; Vitest ignores that folder.
 - The server calls models only through `server/src/models.ts` (`chatModel(purpose)`, `embeddings()`; LangChain, ADR-0002). Tests get fakes from `installStubModels()` (`server/src/stub-models.ts`), installed for every server test file and by `STUB_MODELS=1`.
@@ -61,7 +62,7 @@ Single-context: one root `GLOSSARY.md` + `docs/adr/`. See `docs/agents/domain.md
 ## POC: kb-chatbot
 
 - Spec `.scratch/kb-chatbot/spec.md`; tickets `.scratch/kb-chatbot/issues/`; fixtures and answer key `.scratch/kb-chatbot/fixtures/`.
-- Start: `npm run dev` (chat `localhost:3000/`, admin `localhost:3000/admin`; Next rewrites `/api/*` to the server on :4000).
+- Start: `npm run dev` (chat `localhost:3000/`, documents `localhost:3000/documents`, both for signed-in 成員 only; Next rewrites `/api/*` to the server on :4000).
 - Full suite: `npm run lint && npm run typecheck && npm test && npm run test:e2e` (no LLM calls; `@live` tests excluded). E2E starts its own web :3100 + server :4100 (override with `E2E_WEB_PORT`/`E2E_SERVER_PORT`) on its own `ragchat_e2e_<random>` database, dropped afterwards, never touching a running `npm run dev`.
 - Live tests: `npm run test:live` (Playwright `@live` tests against the real LLM; needs `AI_GATEWAY_API_KEY`).
-- Env (root `.env`, see `.env.example`): `AI_GATEWAY_API_KEY`, `JEV_API_KEY` (Jev subject check; optional, live tests need it), `CHAT_MODEL` (e.g. `openai/gpt-5-mini`), `EXTRACT_MODEL`/`GUEST_MODEL` (optional, default `CHAT_MODEL`), `EMBEDDING_MODEL`, `DATABASE_URL`/`POSTGRES_PORT` (optional), `ADMIN_USERNAME`, `ADMIN_PASSWORD`; server reads `DATA_DIR` (default `server/data/`); web reads `SERVER_URL` (default `http://localhost:4000`).
+- Env (root `.env`, see `.env.example`): `AI_GATEWAY_API_KEY`, `JEV_API_KEY` (Jev subject check; optional, live tests need it), `CHAT_MODEL` (e.g. `openai/gpt-5-mini`), `EXTRACT_MODEL`/`GUEST_MODEL` (optional, default `CHAT_MODEL`), `EMBEDDING_MODEL`, `DATABASE_URL`/`POSTGRES_PORT` (optional), `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`/`CLERK_SECRET_KEY`/`CLERK_MEMBER_ORG_ID` (Clerk sign-in; web loads the root `.env` too); server reads `DATA_DIR` (default `server/data/`); web reads `SERVER_URL` (default `http://localhost:4000`).

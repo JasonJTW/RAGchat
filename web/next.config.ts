@@ -1,5 +1,11 @@
 import path from "node:path";
+import { existsSync } from "node:fs";
 import type { NextConfig } from "next";
+
+// One .env in the repo root serves web and server (Clerk keys, STUB_AUTH).
+// Variables already set (the shell, E2E) win over it.
+const rootEnv = path.join(__dirname, "../.env");
+if (existsSync(rootEnv)) process.loadEnvFile(rootEnv);
 
 const nextConfig: NextConfig = {
   // E2E runs its own `next dev` beside the developer's; separate build dirs

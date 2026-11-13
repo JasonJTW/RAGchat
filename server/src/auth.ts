@@ -1,69 +1,90 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import type { RequestHandler } from "express";
-import { z } from "zod";
+import { clerkClient, clerkMiddleware, getAuth } from "@clerk/express";
+import type { Request, RequestHandler } from "express";
+import { stubIdentity } from "./stub-auth.js";
 
-const COOKIE = "admin_session";
+// Who signed in, through Clerk (ADR: spec #22 存取). Members of the MegaWeaving
+// Organization (CLERK_MEMBER_ORG_ID) are 成員; every other signed-in user is a
+// 訪客. Without CLERK_SECRET_KEY nobody is signed in, unless stub sign-in is on.
 
-// Session tokens live in memory: restarting the server logs the admin out.
-const sessions = new Set<string>();
-
-// Hashing first gives equal-length buffers, so the comparison doesn't leak
-// the length or prefix of the secret through timing.
-function same(a: string, b: string): boolean {
-  const hash = (s: string) => createHash("sha256").update(s).digest();
-  return timingSafeEqual(hash(a), hash(b));
+/** A signed-in user and whether they are a 成員 or a 訪客. */
+export interface Identity {
+  userId: string;
+  role: "member" | "guest";
 }
 
-const Credentials = z.object({ username: z.string(), password: z.string() });
-
-/** True while `ADMIN_PASSWORD` is unset: nobody can log in. */
-export function adminPasswordMissing(): boolean {
-  return !process.env.ADMIN_PASSWORD;
+/**
+ * True when stub sign-in (STUB_AUTH=1, see stub-auth.ts) is on. Refused when
+ * a real Clerk key is set or in production, so a stray flag can't open a
+ * back door.
+ */
+export function stubAuth(): boolean {
+  return (
+    process.env.STUB_AUTH === "1" &&
+    !process.env.CLERK_SECRET_KEY &&
+    process.env.NODE_ENV !== "production"
+  );
 }
 
-// Read on every request so the credentials come from the current env.
-function credentialsMatch({
-  username,
-  password,
-}: z.infer<typeof Credentials>): boolean {
-  const userOk = same(username, process.env.ADMIN_USERNAME || "admin");
-  const passwordOk = same(password, process.env.ADMIN_PASSWORD ?? "");
-  return userOk && passwordOk;
+/** Problems with the auth env, for the server to report at startup. */
+export function authWarnings(): string[] {
+  if (process.env.STUB_AUTH === "1" && !stubAuth())
+    return [
+      "STUB_AUTH=1 is ignored: it never runs with CLERK_SECRET_KEY set or in production.",
+    ];
+  if (stubAuth()) return ["STUB_AUTH=1: sign-in is faked by a cookie."];
+  const warnings = [];
+  if (!process.env.CLERK_SECRET_KEY)
+    warnings.push("CLERK_SECRET_KEY is not set: nobody can sign in.");
+  if (!process.env.CLERK_MEMBER_ORG_ID)
+    warnings.push("CLERK_MEMBER_ORG_ID is not set: every user is a 訪客.");
+  return warnings;
 }
 
-function sessionToken(cookieHeader: string | undefined): string | undefined {
-  for (const pair of cookieHeader?.split(";") ?? []) {
-    const [name, ...value] = pair.trim().split("=");
-    if (name === COOKIE) return value.join("=");
-  }
-}
+let clerk: RequestHandler | undefined;
 
-/** Starts an admin session (httpOnly cookie) when the credentials match. */
-export const login: RequestHandler = (req, res) => {
-  const credentials = Credentials.safeParse(req.body);
-  if (!credentials.success) {
-    res.status(400).json({ error: "username and password are required" });
-    return;
-  }
-  if (adminPasswordMissing()) {
-    res.status(503).json({ error: "ADMIN_PASSWORD is not set" });
-    return;
-  }
-  if (!credentialsMatch(credentials.data)) {
-    res.status(401).json({ error: "invalid credentials" });
-    return;
-  }
-  const token = randomBytes(32).toString("base64url");
-  sessions.add(token);
-  res
-    .cookie(COOKIE, token, { httpOnly: true, sameSite: "lax", path: "/" })
-    .status(204)
-    .end();
+/** Reads the Clerk session of each request; mount before any route. */
+export const authentication: RequestHandler = (req, res, next) => {
+  if (stubAuth() || !process.env.CLERK_SECRET_KEY) return next();
+  clerk ??= clerkMiddleware({
+    publishableKey: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
+    secretKey: process.env.CLERK_SECRET_KEY,
+  });
+  return clerk(req, res, next);
 };
 
-/** Rejects requests without a valid admin session with 401. */
-export const requireAdmin: RequestHandler = (req, res, next) => {
-  const token = sessionToken(req.headers.cookie);
-  if (token && sessions.has(token)) return next();
-  res.status(401).json({ error: "unauthorized" });
-};
+/** The signed-in user of a request, or null when nobody is signed in. */
+export async function identify(req: Request): Promise<Identity | null> {
+  if (stubAuth()) return stubIdentity(req.headers.cookie);
+  if (!process.env.CLERK_SECRET_KEY) return null;
+  const { userId, orgId } = getAuth(req);
+  if (!userId) return null;
+  return {
+    userId,
+    role: (await isMember(userId, orgId)) ? "member" : "guest",
+  };
+}
+
+// Membership is looked up at Clerk and kept for a minute, so removing someone
+// from the Organization takes effect within a minute.
+const MEMBERSHIP_TTL_MS = 60_000;
+const memberships = new Map<string, { member: boolean; until: number }>();
+
+async function isMember(
+  userId: string,
+  activeOrgId: string | null | undefined,
+): Promise<boolean> {
+  const org = process.env.CLERK_MEMBER_ORG_ID;
+  if (!org) return false;
+  if (activeOrgId === org) return true;
+  const key = `${org}:${userId}`;
+  const cached = memberships.get(key);
+  if (cached && cached.until > Date.now()) return cached.member;
+  const { totalCount } =
+    await clerkClient.organizations.getOrganizationMembershipList({
+      organizationId: org,
+      userId: [userId],
+    });
+  const member = totalCount > 0;
+  memberships.set(key, { member, until: Date.now() + MEMBERSHIP_TTL_MS });
+  return member;
+}

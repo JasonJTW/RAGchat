@@ -1,10 +1,11 @@
 import { asc, eq, sql } from "drizzle-orm";
 import type { Request } from "express";
+import { identify } from "./auth.js";
 import { db } from "./db.js";
 import { workspaces } from "./db/schema.js";
 
-// Who is calling and in which 工作區. Until Clerk sign-in (#25) every caller
-// is the same anonymous member of the team workspace.
+// Who is calling and in which 工作區. A 成員 works in the team workspace; a
+// 訪客 has no workspace until guest trials open (#38).
 
 /** The member a request acts as, and the workspace it is limited to. */
 export interface Caller {
@@ -12,12 +13,14 @@ export interface Caller {
   userId: string;
 }
 
-export const ANONYMOUS_USER = "anonymous";
-
-/** The caller of a request; for now always the team's anonymous member. */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- sign-in (#25) reads it
-export async function callerOf(req: Request): Promise<Caller> {
-  return { workspaceId: await teamWorkspace(), userId: ANONYMOUS_USER };
+/** The caller of a request, or why it has no workspace to act in. */
+export async function callerOf(
+  req: Request,
+): Promise<Caller | "signed out" | "guest"> {
+  const identity = await identify(req);
+  if (!identity) return "signed out";
+  if (identity.role !== "member") return "guest";
+  return { workspaceId: await teamWorkspace(), userId: identity.userId };
 }
 
 /** Creates a workspace and returns its id. */

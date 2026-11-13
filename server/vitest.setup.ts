@@ -11,3 +11,7 @@ import { installStubModels } from "./src/stub-models.js";
 process.env.DATABASE_URL = inject("databaseUrl");
 process.env.DATA_DIR = mkdtempSync(path.join(tmpdir(), "kb-server-test-"));
 installStubModels();
+// Sign-in is faked by a cookie (stub-auth.ts); a real Clerk key would turn
+// the stub off, so none is ever set in tests.
+process.env.STUB_AUTH = "1";
+delete process.env.CLERK_SECRET_KEY;

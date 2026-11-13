@@ -1,8 +1,12 @@
-import express, { type ErrorRequestHandler } from "express";
+import express, {
+  type ErrorRequestHandler,
+  type RequestHandler,
+  type Response,
+} from "express";
 import cors from "cors";
 import multer from "multer";
 import { z } from "zod";
-import { login, requireAdmin } from "./auth.js";
+import { authentication, identify } from "./auth.js";
 import { streamReply } from "./chat.js";
 import { isSupported } from "./document-chunks.js";
 import {
@@ -12,7 +16,7 @@ import {
   removeDocument,
 } from "./documents.js";
 import { confirmProposal, rejectProposal } from "./knowledge-base.js";
-import { callerOf } from "./workspaces.js";
+import { callerOf, type Caller } from "./workspaces.js";
 
 export const app = express();
 // Uploads are buffered in memory, so cap what one request can hold.
@@ -25,13 +29,41 @@ const upload = multer({
 
 app.use(cors({ origin: process.env.WEB_ORIGIN ?? "http://localhost:3000" }));
 app.use(express.json());
+app.use(authentication);
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-// The chat is public, so check the shapes the server reads and cap the size.
-// Earlier answers come back in the history, so only questions are kept short.
+app.get("/api/me", async (req, res) => {
+  const identity = await identify(req);
+  if (!identity) {
+    res.status(401).json({ error: "sign in first" });
+    return;
+  }
+  res.json(identity);
+});
+
+// Every knowledge base API acts for a 成員 in the team workspace: 401 when
+// nobody is signed in, 403 for a 訪客 (their trial workspace comes in #38).
+const requireMember: RequestHandler = async (req, res, next) => {
+  const caller = await callerOf(req);
+  if (caller === "signed out") {
+    res.status(401).json({ error: "sign in first" });
+    return;
+  }
+  if (caller === "guest") {
+    res.status(403).json({ error: "guest trials are not open yet" });
+    return;
+  }
+  res.locals.caller = caller;
+  next();
+};
+const callerIn = (res: Response) => res.locals.caller as Caller;
+app.use(["/api/chat", "/api/proposals", "/api/documents"], requireMember);
+
+// Check the shapes the server reads and cap the size. Earlier answers come
+// back in the history, so only questions are kept short.
 const chatMessage = (role: z.ZodType<string>, maxText: number) =>
   z.looseObject({
     role,
@@ -62,7 +94,7 @@ app.post("/api/chat", async (req, res) => {
     });
     return;
   }
-  await streamReply(res, await callerOf(req), body.data.messages);
+  await streamReply(res, callerIn(res), body.data.messages);
 });
 
 // Confirming is the one way facts enter the knowledge base; no model is
@@ -72,7 +104,7 @@ for (const [action, decide] of [
   ["reject", rejectProposal],
 ] as const)
   app.post(`/api/proposals/:id/${action}`, async (req, res) => {
-    const { workspaceId, userId } = await callerOf(req);
+    const { workspaceId, userId } = callerIn(res);
     const result = await decide(workspaceId, req.params.id, userId);
     if (result === "not found") {
       res.status(404).json({ error: "proposal not found" });
@@ -86,10 +118,6 @@ for (const [action, decide] of [
     }
     res.json(result);
   });
-
-app.post("/api/login", login);
-
-app.use("/api/documents", requireAdmin);
 
 app.get("/api/documents", (_req, res) => {
   res.json(listDocuments());
@@ -146,3 +174,12 @@ const uploadLimitHandler: ErrorRequestHandler = (err, _req, res, next) => {
   });
 };
 app.use(uploadLimitHandler);
+
+// Anything else that fails (e.g. Clerk unreachable) is logged here and
+// answered without internals.
+const internalErrorHandler: ErrorRequestHandler = (err, _req, res, next) => {
+  console.error("request failed:", err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: "internal error" });
+};
+app.use(internalErrorHandler);

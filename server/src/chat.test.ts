@@ -2,9 +2,13 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import request from "supertest";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Citation } from "./chat.js";
+import { stubSession } from "./stub-auth.js";
 import { installStubModels } from "./stub-models.js";
+
+const asMember = (app: Parameters<typeof request.agent>[0]) =>
+  request.agent(app).set("Cookie", stubSession("user_member", "member"));
 
 const FIXTURES = path.join(
   import.meta.dirname,
@@ -16,12 +20,8 @@ async function startServerWithUpload() {
   vi.stubEnv("DATA_DIR", mkdtempSync(path.join(tmpdir(), "kb-chat-test-")));
   vi.resetModules();
   const { app } = await import("./app.js");
-  const admin = request.agent(app);
-  await admin
-    .post("/api/login")
-    .send({ username: "admin", password: "correct-horse" });
   const name = "05-projects-and-practice.md";
-  await admin
+  await asMember(app)
     .post("/api/documents")
     .attach("files", readFileSync(path.join(FIXTURES, name)), name);
   return app;
@@ -38,7 +38,7 @@ async function ask(
   question: string,
   history: ChatTurn[] = [],
 ) {
-  const res = await request(app)
+  const res = await asMember(app)
     .post("/api/chat")
     .send({
       messages: [...history, { role: "user", text: question }].map(
@@ -72,9 +72,6 @@ async function ask(
 }
 
 describe("POST /api/chat", () => {
-  beforeEach(() => {
-    vi.stubEnv("ADMIN_PASSWORD", "correct-horse");
-  });
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -82,7 +79,7 @@ describe("POST /api/chat", () => {
   it("rejects a body without a messages array with 400", async () => {
     vi.resetModules();
     const { app } = await import("./app.js");
-    const res = await request(app).post("/api/chat").send({ question: "hi" });
+    const res = await asMember(app).post("/api/chat").send({ question: "hi" });
     expect(res.status).toBe(400);
   });
 
@@ -91,7 +88,7 @@ describe("POST /api/chat", () => {
     vi.stubEnv("DATA_DIR", mkdtempSync(path.join(tmpdir(), "kb-chat-test-")));
     vi.resetModules();
     const { app } = await import("./app.js");
-    const res = await request(app)
+    const res = await asMember(app)
       .post("/api/chat")
       .send({
         messages: [
@@ -135,7 +132,7 @@ describe("POST /api/chat", () => {
   ])("rejects %s with 400 and no stack trace", async (_, messages) => {
     vi.resetModules();
     const { app } = await import("./app.js");
-    const res = await request(app).post("/api/chat").send({ messages });
+    const res = await asMember(app).post("/api/chat").send({ messages });
     expect(res.status).toBe(400);
     expect(res.text).not.toMatch(/TypeError|\n\s+at /);
   });

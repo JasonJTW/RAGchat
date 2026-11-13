@@ -1,6 +1,6 @@
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
-import { logIn, upload } from "./admin-login";
+import { openDocuments, upload } from "./documents";
 
 const UPLOADS = path.join(
   __dirname,
@@ -28,13 +28,13 @@ async function chooseFiles(page: Page, ...names: string[]) {
 }
 
 test.beforeEach(async ({ page }) => {
-  await logIn(page);
+  await openDocuments(page);
 });
 
 test("the upload button appears only after choosing a file", async ({
   page,
 }) => {
-  await page.goto("/admin");
+  await page.goto("/documents");
 
   await expect(page.getByRole("button", { name: "上傳" })).toHaveCount(0);
 
@@ -45,7 +45,7 @@ test("the upload button appears only after choosing a file", async ({
 });
 
 test("uploading a document adds it to the list", async ({ page }) => {
-  await page.goto("/admin");
+  await page.goto("/documents");
 
   await chooseFiles(page, "01-overview.md");
   await page.getByRole("button", { name: "上傳" }).click();
@@ -61,7 +61,7 @@ test("uploading a document adds it to the list", async ({ page }) => {
 test("choosing a file while the page is still loading still uploads", async ({
   page,
 }) => {
-  await page.goto("/admin", { waitUntil: "commit" });
+  await page.goto("/documents", { waitUntil: "commit" });
 
   await chooseFiles(page, "02-origin-philosophy.md");
   await page.getByRole("button", { name: "上傳" }).click();
@@ -77,7 +77,7 @@ test("a failed upload shows an error", async ({ page }) => {
       ? route.fulfill({ status: 500, body: "boom" })
       : route.fallback(),
   );
-  await page.goto("/admin");
+  await page.goto("/documents");
 
   await chooseFiles(page, "03-timeline.md");
   await page.getByRole("button", { name: "上傳" }).click();
@@ -88,7 +88,7 @@ test("a failed upload shows an error", async ({ page }) => {
 });
 
 test("an unsupported format is refused and not listed", async ({ page }) => {
-  await page.goto("/admin");
+  await page.goto("/documents");
   const rows = page.getByRole("table").getByRole("row");
   await expect(page.getByRole("table")).toHaveAttribute("aria-busy", "false");
   const before = await rows.count();
@@ -105,7 +105,7 @@ test("an unsupported format is refused and not listed", async ({ page }) => {
 test("more than 10 files at once are refused and not listed", async ({
   page,
 }) => {
-  await page.goto("/admin");
+  await page.goto("/documents");
   const rows = page.getByRole("table").getByRole("row");
   await expect(page.getByRole("table")).toHaveAttribute("aria-busy", "false");
   const before = await rows.count();
@@ -120,7 +120,7 @@ test("more than 10 files at once are refused and not listed", async ({
 });
 
 test("a file over 5 MB is refused and not listed", async ({ page }) => {
-  await page.goto("/admin");
+  await page.goto("/documents");
   const rows = page.getByRole("table").getByRole("row");
   await expect(page.getByRole("table")).toHaveAttribute("aria-busy", "false");
   const before = await rows.count();
@@ -145,7 +145,7 @@ test("a file over 5 MB is refused and not listed", async ({ page }) => {
 test("two batches add 13 rows, each with name, type, chunks, and time", async ({
   page,
 }) => {
-  await page.goto("/admin");
+  await page.goto("/documents");
   const rows = page.getByRole("table").getByRole("row");
   await expect(page.getByRole("table")).toHaveAttribute("aria-busy", "false");
   const before = await rows.count();

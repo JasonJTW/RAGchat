@@ -1,6 +1,6 @@
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
-import { logIn } from "./admin-login";
+import { openDocuments } from "./documents";
 
 const UPLOADS = path.join(
   __dirname,
@@ -9,7 +9,7 @@ const UPLOADS = path.join(
 
 /** Uploads a file from fixtures/upload/ (or an absolute path); returns its row. */
 async function upload(page: Page, file: string) {
-  await logIn(page);
+  await openDocuments(page);
   const chooser = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "選擇檔案" }).click();
   await (await chooser).setFiles(path.resolve(UPLOADS, file));

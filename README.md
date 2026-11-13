@@ -2,8 +2,8 @@
 
 Knowledge-base chatbot POC for megaweaving (大量交織). Users ask questions in Chinese on the chat page; the bot answers from documents an admin has uploaded and lists its sources under each answer. Questions the documents don't cover get a fixed refusal with the support email.
 
-- Chat: `http://localhost:3000/` (no login)
-- Admin: `http://localhost:3000/admin` (log in to upload, list, and delete documents)
+- Chat: `http://localhost:3000/` (sign in with Clerk; only members of the MegaWeaving Organization get in)
+- Documents: `http://localhost:3000/documents` (members upload, list, and delete documents)
 
 Spec and acceptance criteria: `.scratch/kb-chatbot/spec.md`; tickets: `.scratch/kb-chatbot/issues/`.
 
@@ -29,7 +29,7 @@ npm workspaces:
 - Next rewrites `/api/*` to the server (`SERVER_URL`, default `http://localhost:4000`).
 - All chat and embedding calls go through the Vercel AI SDK and the Vercel AI Gateway. Models are `<provider>/<model>` strings (`server/src/models.ts`); switching models only changes an env var.
 - Documents, chunks, and embeddings are stored as JSON in `server/data/` (override with `DATA_DIR`) and loaded into memory at startup. Changing `EMBEDDING_MODEL` re-embeds every document on the next start.
-- The admin has a single username/password from env vars. Login issues an httpOnly session cookie held in memory, so a server restart logs the admin out.
+- Sign-in is Clerk (`@clerk/nextjs` on the web, `@clerk/express` on the server). Members of the Organization `CLERK_MEMBER_ORG_ID` are 成員 and work in the team workspace; other signed-in users are 訪客 and are told guest trials are not open yet. Tests and E2E fake sign-in with `STUB_AUTH=1` and a `stub_session` cookie, which both apps ignore while `CLERK_SECRET_KEY` is set or in production.
 - API contract: `server/openapi.yaml`.
 
 ## Getting started
@@ -40,13 +40,13 @@ cp .env.example .env   # fill in the variables below
 npm run dev            # web :3000 + server :4000
 ```
 
-| Variable             | Purpose                                                  |
-| -------------------- | -------------------------------------------------------- |
-| `AI_GATEWAY_API_KEY` | Vercel AI Gateway key                                    |
-| `CHAT_MODEL`         | Chat model, default `openai/gpt-5-mini`                  |
-| `EMBEDDING_MODEL`    | Embedding model, default `openai/text-embedding-3-small` |
-| `ADMIN_USERNAME`     | Admin username, default `admin`                          |
-| `ADMIN_PASSWORD`     | Admin password                                           |
+| Variable                                                | Purpose                                                  |
+| ------------------------------------------------------- | -------------------------------------------------------- |
+| `AI_GATEWAY_API_KEY`                                    | Vercel AI Gateway key                                    |
+| `CHAT_MODEL`                                            | Chat model, default `openai/gpt-5-mini`                  |
+| `EMBEDDING_MODEL`                                       | Embedding model, default `openai/text-embedding-3-small` |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` | Clerk keys (web and server read both)                    |
+| `CLERK_MEMBER_ORG_ID`                                   | Clerk Organization whose members are 成員                |
 
 Sample documents: `.scratch/kb-chatbot/fixtures/upload/`; expected answers: `.scratch/kb-chatbot/fixtures/answer-key.md`.
 

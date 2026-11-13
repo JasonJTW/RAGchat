@@ -18,7 +18,7 @@ interface ChunkSummary {
   preview: string;
 }
 
-/** The admin session is missing or expired (the server restarted). */
+/** Nobody is signed in any more (the session ended). */
 class Unauthorized extends Error {}
 
 /** Any other failed request, with its HTTP status. */
@@ -31,7 +31,7 @@ class RequestFailed extends Error {
   }
 }
 
-async function adminFetch(url: string, init?: RequestInit) {
+async function documentsFetch(url: string, init?: RequestInit) {
   const res = await fetch(url, init);
   if (res.status === 401) throw new Unauthorized();
   if (!res.ok)
@@ -42,26 +42,25 @@ async function adminFetch(url: string, init?: RequestInit) {
   return res;
 }
 
-// What the admin sees when the server refuses an upload, by status.
+// What the member sees when the server refuses an upload, by status.
 const UPLOAD_ERRORS: Record<number, string> = {
   400: "一次最多上傳 10 份",
   413: "單一檔案最大 5 MB",
   415: "不支援的檔案格式",
 };
 
-const fetchJson = (url: string) => adminFetch(url).then((res) => res.json());
+const fetchJson = (url: string) =>
+  documentsFetch(url).then((res) => res.json());
 
-export function DocumentAdmin() {
+export function DocumentList() {
   const router = useRouter();
   const {
     data: documents = [],
     isLoading,
     mutate,
   } = useSWR<DocumentSummary[]>("/api/documents", fetchJson, {
-    // Only fires for a failed request, never for the 401 SWR keeps cached
-    // from before logging in.
     onError: (e) => {
-      if (e instanceof Unauthorized) router.replace("/admin/login");
+      if (e instanceof Unauthorized) router.replace("/sign-in");
     },
   });
   const input = useRef<HTMLInputElement>(null);
@@ -82,11 +81,11 @@ export function DocumentAdmin() {
     setError(null);
     setUploading(true);
     try {
-      await adminFetch("/api/documents", { method: "POST", body });
+      await documentsFetch("/api/documents", { method: "POST", body });
       clearSelection();
       await mutate();
     } catch (e) {
-      if (e instanceof Unauthorized) router.replace("/admin/login");
+      if (e instanceof Unauthorized) router.replace("/sign-in");
       else
         setError(
           (e instanceof RequestFailed && UPLOAD_ERRORS[e.status]) ||
@@ -100,10 +99,10 @@ export function DocumentAdmin() {
   async function remove(id: string) {
     setError(null);
     try {
-      await adminFetch(`/api/documents/${id}`, { method: "DELETE" });
+      await documentsFetch(`/api/documents/${id}`, { method: "DELETE" });
       await mutate();
     } catch (e) {
-      if (e instanceof Unauthorized) router.replace("/admin/login");
+      if (e instanceof Unauthorized) router.replace("/sign-in");
       else setError("刪除失敗，請再試一次");
     }
   }

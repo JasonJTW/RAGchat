@@ -5,7 +5,8 @@ import type { Proposal } from "./knowledge-base.js";
 import { installStubModels } from "./stub-models.js";
 import { createWorkspace, type Caller } from "./workspaces.js";
 
-// Each test acts in a workspace of its own, until sign-in (#25) decides it.
+// Each test acts as a signed-in 成員 in a workspace of its own, so tests never
+// share facts; sign-in itself is tested in auth.test.ts and workspaces.test.ts.
 const caller = vi.hoisted(() => ({ current: undefined as unknown as Caller }));
 vi.mock("./workspaces.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./workspaces.js")>()),

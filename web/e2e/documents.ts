@@ -1,17 +1,12 @@
 import path from "node:path";
 import { expect, type Page } from "@playwright/test";
+import { signIn } from "./sign-in";
 
-// The E2E server is started with these credentials (see playwright.config.ts).
-export const ADMIN_USERNAME = "admin";
-export const ADMIN_PASSWORD = "e2e-password";
-
-/** Logs in the way the admin does: open /admin, fill the login form. */
-export async function logIn(page: Page) {
-  await page.goto("/admin");
-  await page.getByRole("textbox", { name: "帳號" }).fill(ADMIN_USERNAME);
-  await page.getByLabel("密碼").fill(ADMIN_PASSWORD);
-  await page.getByRole("button", { name: "登入" }).click();
-  await expect(page).toHaveURL(/\/admin$/);
+/** Signs in as a 成員 and opens the document list (/documents). */
+export async function openDocuments(page: Page) {
+  await signIn(page);
+  await page.goto("/documents");
+  await expect(page.getByRole("heading", { name: "文件" })).toBeVisible();
 }
 
 const UPLOADS = path.join(
@@ -19,7 +14,7 @@ const UPLOADS = path.join(
   "../../.scratch/kb-chatbot/fixtures/upload",
 );
 
-/** Uploads files from fixtures/upload/ in one batch, from the logged-in admin. */
+/** Uploads files from fixtures/upload/ in one batch, on the open document list. */
 export async function upload(page: Page, ...names: string[]) {
   const chooser = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "選擇檔案" }).click();
@@ -30,7 +25,7 @@ export async function upload(page: Page, ...names: string[]) {
   });
 }
 
-/** Deletes every uploaded document, from the logged-in admin. */
+/** Deletes every uploaded document, on the open document list. */
 export async function removeAllDocuments(page: Page) {
   await expect(page.getByRole("table")).toHaveAttribute("aria-busy", "false");
   const rows = page.getByRole("table").getByRole("row");

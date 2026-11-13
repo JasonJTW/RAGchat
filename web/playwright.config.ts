@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseEnv } from "node:util";
 import { defineConfig, devices } from "@playwright/test";
-import { ADMIN_PASSWORD, ADMIN_USERNAME } from "./e2e/admin-login";
+import { MEMBER_COOKIE } from "./e2e/sign-in";
 
 // Override to run beside another checkout's E2E run.
 const WEB_PORT = Number(process.env.E2E_WEB_PORT ?? 3100);
@@ -32,6 +32,12 @@ function rootEnv(): Record<string, string | undefined> {
   }
 }
 
+const STUB_AUTH = {
+  STUB_AUTH: "1",
+  CLERK_SECRET_KEY: "",
+  NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "",
+};
+
 export default defineConfig({
   testDir: "./e2e",
   // Live tests (tagged @live) call the real LLM; run them with `npm run test:live`.
@@ -47,6 +53,9 @@ export default defineConfig({
   use: {
     baseURL: `http://localhost:${WEB_PORT}`,
     trace: "on-first-retry",
+    // Signed in as a 成員 by the stub session (STUB_AUTH=1 below); specs
+    // about signing in override it.
+    storageState: { cookies: [MEMBER_COOKIE], origins: [] },
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   // Tests get their own web + server on separate ports, never the developer's
@@ -59,8 +68,9 @@ export default defineConfig({
       env: {
         PORT: String(SERVER_PORT),
         DATABASE_URL: process.env.E2E_DATABASE_URL,
-        ADMIN_USERNAME,
-        ADMIN_PASSWORD,
+        // Sign-in is faked by a cookie (e2e/sign-in.ts), never real Clerk,
+        // live runs included. A Clerk key would turn the stub off.
+        ...STUB_AUTH,
         // A fresh, empty document store per run, never the dev server/data/.
         DATA_DIR: mkdtempSync(path.join(tmpdir(), "kb-e2e-")),
         // The full suite must not reach a real model: blank the keys and use
@@ -77,6 +87,7 @@ export default defineConfig({
       command: `npx next dev -p ${WEB_PORT}`,
       env: {
         SERVER_URL: `http://localhost:${SERVER_PORT}`,
+        ...STUB_AUTH,
         NEXT_DIST_DIR: ".next-e2e",
       },
       url: `http://localhost:${WEB_PORT}`,

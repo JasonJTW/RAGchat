@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
-import { ADMIN_USERNAME, logIn, upload } from "./admin-login";
+import { openDocuments as logIn, upload } from "./documents";
 import { ask, askFollowUp } from "./ask";
 
 // The spec's Demo Script 1–8, run in order against one server that starts with
@@ -247,27 +247,18 @@ function answerKeyTest(id: string) {
 test.describe("demo script @live", () => {
   test.skip(!hasKey("AI_GATEWAY_API_KEY"), "AI_GATEWAY_API_KEY is not set");
 
-  test("1. /admin without logging in leads to the login screen", async ({
-    page,
-  }) => {
-    await page.goto("/admin");
-    await expect(page).toHaveURL(/\/admin\/login$/);
-    await expect(page.getByRole("button", { name: "登入" })).toBeVisible();
-    await page.screenshot({ path: path.join(EVIDENCE, "step1.png") });
+  test.describe("signed out", () => {
+    test.use({ storageState: { cookies: [], origins: [] } });
+    test("1. the chat without signing in leads to sign-in", async ({
+      page,
+    }) => {
+      await page.goto("/");
+      await expect(page).toHaveURL(/\/sign-in/);
+      await page.screenshot({ path: path.join(EVIDENCE, "step1.png") });
+    });
   });
 
-  test("2. a wrong password is refused; the right one opens an empty list", async ({
-    page,
-  }) => {
-    await page.goto("/admin/login");
-    await page.getByRole("textbox", { name: "帳號" }).fill(ADMIN_USERNAME);
-    await page.getByLabel("密碼").fill("wrong-password");
-    await page.getByRole("button", { name: "登入" }).click();
-    await expect(page.getByRole("main").getByRole("alert")).toHaveText(
-      "帳號或密碼錯誤",
-    );
-    await page.screenshot({ path: path.join(EVIDENCE, "step2-wrong.png") });
-
+  test("2. a signed-in 成員 opens an empty document list", async ({ page }) => {
     await logIn(page);
     await expect(await documentRows(page)).toHaveCount(0);
     await page.screenshot({ path: path.join(EVIDENCE, "step2-empty.png") });
