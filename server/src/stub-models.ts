@@ -23,8 +23,10 @@ export interface StubChat {
   /**
    * Answers `withStructuredOutput(schema, { name }).invoke(messages)` from
    * the last message's text. By default, for the name "correction" it
-   * corrects as `stubCorrections` does; otherwise it extracts facts: each
-   * sentence (split at 。 and line breaks) is one fact.
+   * corrects as `stubCorrections` does; for "entities" it names entities as
+   * `stubEntities` does; for "entity-link" it makes every mention a new
+   * entity; otherwise it extracts facts: each sentence (split at 。 and
+   * line breaks) is one fact.
    */
   structured: (text: string, name?: string) => unknown;
   /** Each structured-output prompt, flattened like `prompts`. */
@@ -70,7 +72,13 @@ export function installStubModels(): {
     rewrite: STUB_CHAT_REWRITE,
     rewritePrompts: [],
     structured: (text, name) =>
-      name === "correction" ? stubCorrections(text) : sentencesAsFacts(text),
+      name === "correction"
+        ? stubCorrections(text)
+        : name === "entities"
+          ? stubEntities(text)
+          : name === "entity-link"
+            ? { links: [] }
+            : sentencesAsFacts(text),
     structuredPrompts: [],
   };
   const vectors = new Map<string, number[]>();
@@ -204,6 +212,33 @@ function sentencesAsFacts(text: string) {
       .map((sentence) => sentence.trim())
       .filter(Boolean)
       .map((content) => ({ content })),
+  };
+}
+
+/**
+ * The default entities, read from [連結實體]'s numbered facts: each 「name」
+ * in a fact is an entity of kind "other", and a fact naming two or more
+ * relates the first to the second by the words between them (e.g.
+ * 「王小明」負責「回收模組」: 王小明 負責 回收模組).
+ */
+function stubEntities(text: string) {
+  return {
+    facts: [...text.matchAll(/^\[(\d+)\] (.*)$/gm)].map(([, n, content]) => {
+      const names = [...content.matchAll(/「([^」]+)」/g)];
+      const between =
+        names.length > 1
+          ? content
+              .slice(names[0].index + names[0][0].length, names[1].index)
+              .trim()
+          : "";
+      return {
+        fact: Number(n),
+        entities: names.map(([, name]) => ({ name, kind: "other" })),
+        relations: between
+          ? [{ from: names[0][1], relation: between, to: names[1][1] }]
+          : [],
+      };
+    }),
   };
 }
 

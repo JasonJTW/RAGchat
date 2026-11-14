@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Proposal } from "@/lib/chat-message";
 import { ProposalCard } from "./proposal-card";
 
@@ -104,4 +104,61 @@ it("cannot confirm with every item unticked", () => {
 
   expect(screen.getByRole("button", { name: /^確認所選/ })).toBeDisabled();
   expect(screen.getByRole("button", { name: "拒絕" })).toBeEnabled();
+});
+
+describe("entities", () => {
+  const withEntities = (): Proposal => ({
+    ...proposalOf([
+      { ...item(1), entityIds: ["e-model", "e-kobayashi"] },
+      { ...item(2), entityIds: ["e-kobayashi"] },
+    ]),
+    entities: [
+      {
+        id: "e-model",
+        name: "減碳計算模型",
+        kind: "method",
+        new: true,
+        candidates: [
+          { id: "e-algorithm", name: "避免排放算法" },
+          { id: "e-transport", name: "運送排放算法" },
+        ],
+      },
+      { id: "e-kobayashi", name: "小林", kind: "person", new: false },
+    ],
+  });
+
+  it("shows each item's entities, the new ones marked", () => {
+    render(<ProposalCard proposal={withEntities()} />);
+
+    const [first, second] = screen.getAllByRole("group", { name: "實體" });
+    expect(first).toHaveTextContent("減碳計算模型新實體小林");
+    expect(second).toHaveTextContent("小林");
+    expect(second).not.toHaveTextContent("新實體");
+  });
+
+  it("relinks a new entity to the existing one chosen, sent with 確認", async () => {
+    const fetch = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(
+      () =>
+        Promise.resolve(
+          Response.json({ ...withEntities(), status: "confirmed" }),
+        ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    render(<ProposalCard proposal={withEntities()} />);
+
+    const select = screen.getByRole("combobox", {
+      name: "「減碳計算模型」連到",
+    });
+    expect(
+      [...(select as HTMLSelectElement).options].map((o) => o.textContent),
+    ).toEqual(["新建實體", "避免排放算法", "運送排放算法"]);
+    fireEvent.change(select, { target: { value: "e-algorithm" } });
+    fireEvent.click(screen.getByRole("button", { name: "確認" }));
+
+    await screen.findByText("已確認，已寫入知識庫。");
+    const body = JSON.parse(fetch.mock.calls[0][1].body as string) as {
+      relinks: unknown;
+    };
+    expect(body.relinks).toEqual([{ entityId: "e-model", to: "e-algorithm" }]);
+  });
 });

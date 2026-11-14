@@ -8,8 +8,10 @@ import { noul } from "@typesafe-ai/sdk";
 import {
   type Edited,
   type HistoryEntry,
+  type FactMatch,
   searchChunks,
   searchFacts,
+  searchGraph,
 } from "../knowledge-base.js";
 import { chatModel, systemOne } from "../models.js";
 import { type NodeConfig, type State, type Turn, writeText } from "./state.js";
@@ -45,6 +47,10 @@ export interface Citation extends Evidence {
 // sources for the context facts leave out (e.g. a decision's reasoning).
 const FACTS_PER_ANSWER = 6;
 const PASSAGES_PER_ANSWER = 2;
+// Facts each lane (vector, entity graph) offers before they are fused by
+// reciprocal rank.
+const FACT_CANDIDATES = 20;
+const RRF_K = 60;
 
 // Dates as the team reads them: YYYY-MM-DD in Taiwan.
 const TEAM_DATE = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Taipei" });
@@ -136,8 +142,12 @@ export async function checkSubject(
 /**
  * 檢索: the workspace's current confirmed facts (at most 6) and the passages
  * of its confirmed file sources (at most 2) that best match the question,
- * merged best first. A follow-up is first rewritten into a standalone
- * question.
+ * merged best first. Facts come from two lanes fused by reciprocal rank:
+ * the most similar ones, and the ones the entity graph reaches from the
+ * entities the question names (by name or alias, up to two hops). A
+ * question naming an entity the knowledge base has facts about counts as
+ * covered, however its wording compares. A follow-up is first rewritten
+ * into a standalone question.
  */
 export async function retrieve(
   state: Pick<State, "workspaceId" | "turns" | "message">,
@@ -145,10 +155,12 @@ export async function retrieve(
   const query = state.turns.length
     ? await standaloneQuestion(state.turns, state.message)
     : state.message;
-  const [facts, passages] = await Promise.all([
-    searchFacts(state.workspaceId, query, FACTS_PER_ANSWER),
+  const [similar, graph, passages] = await Promise.all([
+    searchFacts(state.workspaceId, query, FACT_CANDIDATES),
+    searchGraph(state.workspaceId, query, FACT_CANDIDATES),
     searchChunks(state.workspaceId, query, PASSAGES_PER_ANSWER),
   ]);
+  const facts = fused([similar, graph]).slice(0, FACTS_PER_ANSWER);
   const scored: { similarity: number; evidence: Evidence }[] = facts.map(
     (fact) => ({
       similarity: fact.similarity,
@@ -187,8 +199,25 @@ export async function retrieve(
   merged.push(...scored.slice(f));
   return {
     evidence: merged.map(({ evidence }) => evidence),
-    similarity: Math.max(0, ...merged.map((item) => item.similarity)),
+    similarity: Math.max(
+      graph.length ? MIN_SIMILARITY : 0,
+      ...merged.map((item) => item.similarity),
+    ),
   };
+}
+
+// The facts of the rankings, by reciprocal rank fusion.
+function fused(rankings: FactMatch[][]): FactMatch[] {
+  const scores = new Map<string, { fact: FactMatch; score: number }>();
+  for (const ranking of rankings)
+    ranking.forEach((fact, rank) => {
+      const entry = scores.get(fact.id) ?? { fact, score: 0 };
+      entry.score += 1 / (RRF_K + rank + 1);
+      scores.set(fact.id, entry);
+    });
+  return [...scores.values()]
+    .sort((a, b) => b.score - a.score)
+    .map(({ fact }) => fact);
 }
 
 /**

@@ -44,6 +44,8 @@ export interface Proposal {
   decidedBy?: string;
   /** While pending: older pending items that confirming it would expire. */
   expires?: ExpiringItem[];
+  /** The 實體 its facts speak of (absent on cards saved before entities). */
+  entities?: ProposalEntity[];
   /** 取代 and 過時 items first, then 新增 ones. */
   items: {
     id: string;
@@ -64,7 +66,19 @@ export interface Proposal {
     effectiveAt?: string;
     /** The newer proposal whose confirmation expired it (已過期). */
     expiredBy?: string;
+    /** The entities its fact speaks of (ids into `entities`). */
+    entityIds?: string[];
   }[];
+}
+
+/** A 實體 a 提案's facts speak of; new until a confirmed fact does. */
+export interface ProposalEntity {
+  id: string;
+  name: string;
+  kind: string;
+  new: boolean;
+  /** For a new entity: existing ones it may be instead, to relink it to. */
+  candidates?: { id: string; name: string }[];
 }
 
 /** A pending item of an older 提案 that confirming a newer one expires. */

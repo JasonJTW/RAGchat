@@ -345,6 +345,38 @@ describe("confirming a newer proposal", () => {
     expect(await current()).toEqual([MASS, RECYCLED].sort());
   });
 
+  describe("whose facts speak of entities", () => {
+    const about = (content: string, entity: string) =>
+      propose(workspaceId, "member-a", {
+        source: { kind: "message", content },
+        facts: [{ content, entities: [{ name: entity, kind: "method" }] }],
+      });
+
+    it("expires an older item making the same claim about the same entity", async () => {
+      const older = await about(TAKEN, "避免排放算法");
+      const newer = await about(RECYCLED, "避免排放算法");
+
+      expect(newer.expires).toEqual([
+        expect.objectContaining({ itemId: older.items[0].id }),
+      ]);
+      expect((await confirm(newer.id)).status).toBe(200);
+      const pending = (await request(app).get("/api/proposals"))
+        .body as Proposal[];
+      expect(pending.map((p) => p.id)).not.toContain(older.id);
+    });
+
+    it("expires no older item making an alike claim about another entity", async () => {
+      const older = await about(TAKEN, "避免排放算法");
+      const newer = await about(RECYCLED, "運送排放算法");
+
+      expect(newer.expires).toEqual([]);
+      expect((await confirm(newer.id)).status).toBe(200);
+      const pending = (await request(app).get("/api/proposals"))
+        .body as Proposal[];
+      expect(pending.map((p) => p.id)).toEqual([older.id]);
+    });
+  });
+
   it("expires an older proposal whole when it covers every item, and leaves newer ones pending", async () => {
     const taken = await confirmed(TAKEN);
     const older = await proposeCorrection("member-a", taken, "obsolete");
