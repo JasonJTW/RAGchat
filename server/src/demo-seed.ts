@@ -1,7 +1,15 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { and, eq, getTableColumns, is, ne, sql } from "drizzle-orm";
+import {
+  and,
+  eq,
+  getTableColumns,
+  getTableName,
+  is,
+  ne,
+  sql,
+} from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import { db } from "./db.js";
 import * as schema from "./db/schema.js";
@@ -28,12 +36,28 @@ const SEED_DIR = path.join(import.meta.dirname, "../demo-data/seed");
 /** Who proposed and confirmed the 示範資料 (shown as such on its facts). */
 export const DEMO_USER = "示範資料";
 
-/** A fact of a seed file: its text and a phrase of the passage it is from. */
+/**
+ * A fact of a seed file: its text, a phrase of the passage it is from, the
+ * entities it speaks of (`as`: another name of an earlier seed entity, which
+ * becomes its 別名) and the relations it states between them (by index).
+ */
 interface SeedFact {
   key: string;
   content: string;
   from: string;
+  entities?: SeedEntity[];
+  relations?: [from: number, relation: string, to: number][];
 }
+
+interface SeedEntity {
+  name: string;
+  kind: string;
+  as?: string;
+}
+
+const ALGORITHM: SeedEntity = { name: "避免排放算法", kind: "method" };
+const DONE_PAGE: SeedEntity = { name: "交換完成頁", kind: "feature" };
+const LIFETIME: SeedEntity = { name: "壽命比 L", kind: "other" };
 
 /** A seed file's 取代 or 過時 of an earlier seed fact. */
 type SeedCorrection = {
@@ -63,38 +87,56 @@ const SEED: SeedSource[] = [
         content:
           "避免排放公式為 A = W × EF × R（A：每筆交換的避免排放量 kgCO2e；W：物品重量 kg；EF：類別新品生產排放係數；R：取代率）",
         from: "A = W × EF × R",
+        entities: [ALGORITHM, { name: "取代率 R", kind: "other" }],
+        relations: [[0, "使用", 1]],
       },
       {
         key: "r",
         content: "取代率 R 所有類別統一為 0.7",
         from: "R**：取代率",
+        entities: [{ name: "取代率 R", kind: "other" }],
       },
       {
         key: "ef",
         content:
           "類別排放係數 EF（kgCO2e/kg）：木製家具 1.8、衣物與布料 15.0、小家電 6.5、書籍與紙類 1.2、兒童用品 4.0",
         from: "| 木製家具",
+        entities: [{ name: "類別排放係數 EF", kind: "other" }],
       },
       {
         key: "report",
         content:
           "每月 5 日前由張小石把上個月的交換與避免排放量匯出成 CSV，寄給霧橋市循環經濟辦公室",
         from: "每月 5 日以前",
+        entities: [
+          { name: "張小石", kind: "person" },
+          { name: "每月減碳報表", kind: "document" },
+          { name: "霧橋市循環經濟辦公室", kind: "organization" },
+        ],
+        relations: [
+          [0, "寄送", 1],
+          [1, "寄給", 2],
+        ],
       },
       {
         key: "owner",
         content: "避免排放算法（公式與係數）的負責人是林小樹",
         from: "公式與係數：林小樹",
+        entities: [{ name: "林小樹", kind: "person" }, ALGORITHM],
+        relations: [[0, "負責", 1]],
       },
       {
         key: "display-owner",
         content: "交換完成頁的避免排放顯示由陳小葉負責",
         from: "交換完成頁的顯示：陳小葉",
+        entities: [{ name: "陳小葉", kind: "person" }, DONE_PAGE],
+        relations: [[0, "負責", 1]],
       },
       {
         key: "alias",
         content: "「減碳計算模型」是「避免排放算法」的別名",
         from: "好物輪轉是霧橋市的物資交換平台",
+        entities: [ALGORITHM],
       },
     ],
   },
@@ -126,18 +168,25 @@ const SEED: SeedSource[] = [
         key: "l",
         content: "壽命比 L 預設 0.5；刊登時勾選「全新未使用」的物品 L 為 1",
         from: "預設 0.5",
+        entities: [LIFETIME],
       },
       {
         key: "why-l",
         content:
-          "公式加入壽命比 L 的理由：二手物品的剩餘壽命比新品短，原公式高估了它取代的新品量，尤其是衣物",
+          "減碳計算模型加入壽命比 L 的理由：二手物品的剩餘壽命比新品短，原公式高估了它取代的新品量，尤其是衣物",
         from: "高估",
+        entities: [
+          // 「減碳計算模型」 names 避免排放算法: it becomes its 別名.
+          { name: "減碳計算模型", kind: "method", as: "避免排放算法" },
+          LIFETIME,
+        ],
       },
       {
         key: "transport",
         content:
           "待解問題：避免排放是否扣除取件的運送排放、距離怎麼估，尚未決定",
         from: "待解問題",
+        entities: [{ name: "運送排放", kind: "other" }],
       },
     ],
   },
@@ -150,17 +199,20 @@ const SEED: SeedSource[] = [
         content:
           "交換完成頁的避免排放數字下方顯示「已考慮二手物品的剩餘壽命」（PR #213）",
         from: "已考慮二手物品的剩餘壽命",
+        entities: [DONE_PAGE],
       },
       {
         key: "map-radius",
         content:
           "地圖搜尋頁可依半徑（1、3、5、10 公里）篩選刊登物品（PR #209）",
         from: "半徑篩選",
+        entities: [{ name: "地圖搜尋頁", kind: "feature" }],
       },
       {
         key: "brand-new",
         content: "刊登表單有「全新未使用」勾選框（PR #214）",
         from: "全新未使用",
+        entities: [{ name: "刊登表單", kind: "feature" }],
       },
     ],
   },
@@ -255,10 +307,24 @@ async function buildSeed(workspaceId: string) {
         createdAt: new Date(source.createdAt),
       },
       chunks,
-      facts: source.facts.map((fact) => ({
-        content: fact.content,
-        chunk: chunkOf(fact.from),
-      })),
+      facts: await Promise.all(
+        source.facts.map(async (fact) => ({
+          content: fact.content,
+          chunk: chunkOf(fact.from),
+          entities: await Promise.all(
+            (fact.entities ?? []).map(async (e) => ({
+              name: e.name,
+              kind: e.kind,
+              ...(e.as && { entityId: await entityNamed(workspaceId, e.as) }),
+            })),
+          ),
+          relations: (fact.relations ?? []).map(([from, relation, to]) => ({
+            from,
+            relation,
+            to,
+          })),
+        })),
+      ),
       corrections,
     });
     const confirmed = await confirmProposal(
@@ -279,6 +345,21 @@ async function buildSeed(workspaceId: string) {
   }
 }
 
+// The id of the workspace's entity of that name.
+async function entityNamed(workspaceId: string, name: string) {
+  const [row] = await db
+    .select({ id: schema.entities.id })
+    .from(schema.entities)
+    .where(
+      and(
+        eq(schema.entities.workspaceId, workspaceId),
+        eq(schema.entities.name, name),
+      ),
+    );
+  if (!row) throw new Error(`no seed entity named ${name}`);
+  return row.id;
+}
+
 const factIdOf = (proposal: Proposal, content: string) =>
   proposal.items.find((item) => item.content === content)!.factId!;
 
@@ -288,11 +369,17 @@ const factIdOf = (proposal: Proposal, content: string) =>
  * Ordered so that a table comes after those it refers to.
  */
 export function workspaceTables(): PgTable[] {
-  const tables = (Object.values(schema) as unknown[]).filter(
-    (value): value is PgTable =>
-      is(value, PgTable) &&
-      value !== (schema.conversations as PgTable) &&
-      "workspaceId" in getTableColumns(value),
+  const all = (Object.values(schema) as unknown[]).filter(
+    (value): value is PgTable => is(value, PgTable),
+  );
+  // A table keyed to a workspace only through another table would be left
+  // out of a trial's copy: refuse it, so it gets its own workspace_id.
+  for (const table of all)
+    if (!UNSCOPED.includes(table) && !("workspaceId" in getTableColumns(table)))
+      throw new Error(`${getTableName(table)} has no workspace_id`);
+  const tables = all.filter(
+    (table) =>
+      !UNSCOPED.includes(table) && table !== (schema.conversations as PgTable),
   );
   const ordered: PgTable[] = [];
   const pending = [...tables];
@@ -308,6 +395,9 @@ export function workspaceTables(): PgTable[] {
   return ordered;
 }
 
+// The tables outside any workspace.
+const UNSCOPED: PgTable[] = [workspaces, schema.guestUsage];
+
 function referencedTables(table: PgTable): PgTable[] {
   return getTableConfig(table).foreignKeys.map(
     (fk) => fk.reference().foreignTable,
@@ -315,16 +405,20 @@ function referencedTables(table: PgTable): PgTable[] {
 }
 
 // Copies every row of one workspace into another, each under a new id, its
-// references to other copied rows re-pointed to their copies. A table's rows
-// go in one statement, so rows that refer to each other (a fact's
-// superseded_by) are checked once all are in.
+// references to other copied rows re-pointed to their copies (a reference to
+// a row outside the workspace would become null, or fail when required), so
+// no copied row points at the source workspace. A table's rows go in one
+// statement, so rows that refer to each other (a fact's superseded_by) are
+// checked once all are in.
 async function copyWorkspace(tx: Tx, from: string, to: string) {
   const tables = workspaceTables();
   await tx.execute(
     sql`create temp table copied_ids (old uuid primary key, new uuid not null default gen_random_uuid()) on commit drop`,
   );
   for (const table of tables) {
-    const { name } = getTableConfig(table);
+    const { name, columns } = getTableConfig(table);
+    // A link table keyed by its references (fact_entities) has no id of its own.
+    if (!columns.some((column) => column.name === "id")) continue;
     await tx.execute(
       sql`insert into copied_ids (old) select id from ${sql.identifier(name)} where workspace_id = ${from}`,
     );
@@ -338,8 +432,6 @@ async function copyWorkspace(tx: Tx, from: string, to: string) {
         .flatMap((ref) => ref.columns.map((column) => column.name)),
     );
     const names = columns.map((column) => column.name);
-    if (!names.includes("id"))
-      throw new Error(`${name} has no id column to copy by`);
     const values = names.map((column) =>
       column === "workspace_id"
         ? sql`${to}::uuid`

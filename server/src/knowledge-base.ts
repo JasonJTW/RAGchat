@@ -17,7 +17,22 @@ import {
   sourceChunks,
   sources,
 } from "./db/schema.js";
+import {
+  entitiesNamedIn,
+  entitiesOfFacts,
+  graphFacts,
+  inheritEntities,
+  linkFacts,
+  type Mention,
+  type ProposalEntity,
+  pruneEntities,
+  type Relation,
+  relink,
+  type Relink,
+} from "./entities.js";
 import { embeddings } from "./models.js";
+
+export type { Mention, ProposalEntity, Relation, Relink };
 
 // 知識庫: sources, facts and the proposals that change them (ADR-0001). The
 // knowledge base proper is the current confirmed facts: confirmed, and not
@@ -54,6 +69,8 @@ export interface ProposalItem {
   effectiveAt?: string;
   /** The newer proposal whose confirmation expired it (已過期). */
   expiredBy?: string;
+  /** The entities its fact speaks of (ids into `Proposal.entities`). */
+  entityIds?: string[];
 }
 
 /** A fact a member edited inline on its proposal card. */
@@ -86,6 +103,8 @@ export interface Proposal {
    * would expire, as they make the same claim as one of its items.
    */
   expires?: ExpiringItem[];
+  /** The entities its facts speak of, the new ones marked. */
+  entities: ProposalEntity[];
 }
 
 /** A current confirmed fact: in the knowledge base, not replaced or 過時. */
@@ -155,7 +174,16 @@ export interface SourceChunk {
  * A fact drawn from an input: its text, and for a file the index (into
  * `chunks`) of the passage it came from.
  */
-export type FactDraft = string | { content: string; chunk?: number };
+export type FactDraft =
+  | string
+  | {
+      content: string;
+      chunk?: number;
+      /** The entities it speaks of, linked by [連結實體]. */
+      entities?: Mention[];
+      /** Relations it states between those entities (by index). */
+      relations?: Relation[];
+    };
 
 /** A change to a current fact proposed by a correction. */
 export type Correction = {
@@ -170,6 +198,11 @@ export type Correction = {
 const current = and(eq(facts.status, "confirmed"), isNull(facts.validTo));
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+// The entities an item's new fact and its target speak of (i: the item).
+const ENTITIES_OF_ITEM = sql.raw(
+  `array(select fe.entity_id from fact_entities fe where fe.fact_id in (i.fact_id, i.target_fact_id))`,
+);
 
 /**
  * Stores the input as a source, with a file's passages, and proposes its
@@ -197,7 +230,13 @@ export async function propose(
 ): Promise<Proposal> {
   const corrections = input.corrections ?? [];
   const chunks = input.chunks ?? [];
-  const added: { content: string; validFrom?: Date; chunk?: number }[] = [
+  const added: {
+    content: string;
+    validFrom?: Date;
+    chunk?: number;
+    entities?: Mention[];
+    relations?: Relation[];
+  }[] = [
     ...corrections.flatMap((c) =>
       c.kind === "supersede"
         ? [{ content: c.content, validFrom: new Date(c.effectiveAt) }]
@@ -208,9 +247,15 @@ export async function propose(
     ),
   ];
   const model = embeddings();
+  const names = [
+    ...new Set(
+      added.flatMap((fact) => (fact.entities ?? []).map((m) => m.name)),
+    ),
+  ];
   const texts = [
     ...added.map((fact) => fact.content),
     ...chunks.map((chunk) => chunk.embedText),
+    ...names,
   ];
   const vectors = texts.length ? await model.embedDocuments(texts) : [];
   return db.transaction(async (tx) => {
@@ -264,6 +309,26 @@ export async function propose(
             .returning({ id: facts.id })
         ).map((fact) => fact.id)
       : [];
+    const nameAt = added.length + chunks.length;
+    await linkFacts(
+      tx,
+      workspaceId,
+      model.model,
+      added.map((fact, i) => ({
+        factId: factIds[i],
+        mentions: fact.entities ?? [],
+        relations: fact.relations ?? [],
+      })),
+      (name) => vectors[nameAt + names.indexOf(name)],
+    );
+    // A replacement speaks of what the fact it replaces did.
+    await inheritEntities(
+      tx,
+      workspaceId,
+      corrections
+        .filter((c) => c.kind === "supersede")
+        .map((c, i) => ({ factId: factIds[i], fromFactId: c.targetFactId })),
+    );
     const [proposal] = await tx
       .insert(proposals)
       .values({ workspaceId, sourceId: source.id, createdBy: userId })
@@ -345,7 +410,8 @@ export interface ExpiringItem {
 export const RELATED_AT = 0.75;
 /**
  * How alike two facts are when they make the same claim: confirming one
- * expires the pending items of older proposals this alike.
+ * expires the pending items of older proposals this alike that speak of
+ * the same entity (同一實體＋同一主張).
  */
 export const SAME_CLAIM_AT = 0.9;
 
@@ -357,7 +423,10 @@ export const SAME_CLAIM_AT = 0.9;
  * and the editor; an edit that leaves the text as it is changes nothing.
  * Items `excluded` (unticked on the card) take no effect: their facts are
  * rejected, their targets left as they are, and they count in neither the
- * re-check nor the expiry below.
+ * re-check nor the expiry below. Each of `relinks` makes a new entity of
+ * the ticked items' facts the existing entity a member chose instead, its
+ * name kept as an alias (see entities.ts `relink`); one that is not a new
+ * entity of the proposal, or names no live entity, is an invalid edit.
  *
  * It is re-checked, edits applied, against the changes confirmed since it
  * was made: unless the member acknowledged each of them (`acknowledged`,
@@ -377,7 +446,13 @@ export async function confirmProposal(
     edits = [],
     excluded = [],
     acknowledged = [],
-  }: { edits?: ItemEdit[]; excluded?: string[]; acknowledged?: string[] } = {},
+    relinks = [],
+  }: {
+    edits?: ItemEdit[];
+    excluded?: string[];
+    acknowledged?: string[];
+    relinks?: Relink[];
+  } = {},
 ): Promise<Proposal | DecisionError | Stopped> {
   const texts = edits.map((edit) => edit.content.trim());
   if (texts.some((text) => !text)) return "invalid edit";
@@ -395,6 +470,7 @@ export async function confirmProposal(
     edits: edited,
     excluded,
     acknowledged,
+    relinks,
   });
 }
 
@@ -406,6 +482,14 @@ export async function rejectProposal(
 ): Promise<Proposal | DecisionError> {
   return (await decide(workspaceId, proposalId, userId, "rejected")) as
     Proposal | DecisionError;
+}
+
+// Thrown to roll the confirmation (and its edits) back when a relink is
+// invalid.
+class InvalidError extends Error {
+  constructor() {
+    super("invalid edit");
+  }
 }
 
 // Thrown to roll the confirmation (and its edits) back when it is stopped.
@@ -424,7 +508,9 @@ async function decide(
     edits = [],
     excluded = [],
     acknowledged = [],
+    relinks = [],
   }: {
+    relinks?: Relink[];
     excluded?: string[];
     edits?: {
       itemId: string;
@@ -499,6 +585,16 @@ async function decide(
       }
       const now = new Date();
       const changes = ticked.filter((item) => item.target);
+      if (
+        status === "confirmed" &&
+        !(await relink(
+          tx,
+          workspaceId,
+          ticked.flatMap((item) => (item.factId ? [item.factId] : [])),
+          relinks,
+        ))
+      )
+        throw new InvalidError();
       if (status === "confirmed") {
         // Re-checked after the edits, so the edited texts are compared.
         const conflicts = await conflictsOf(tx, workspaceId, proposal);
@@ -530,10 +626,12 @@ async function decide(
             sql`${facts.id} in (select ${proposalItems.factId} from ${proposalItems} where ${proposalItems.proposalId} = ${proposalId} and ${proposalItems.expiredBy} is null and not ${proposalItems.excluded})`,
           ),
         );
+      await pruneEntities(tx, workspaceId);
       return cardOf(tx, workspaceId, decided);
     });
   } catch (error) {
     if (error instanceof StoppedError) return { conflicts: error.conflicts };
+    if (error instanceof InvalidError) return "invalid edit";
     throw error;
   }
 }
@@ -628,13 +726,17 @@ interface Related {
 // The items of other proposals (narrowed by `which`) that touch one of the
 // proposal's own live items: they change the same fact, or a fact of one is
 // at least `at` alike (cosine) to a fact of the other, the new fact and the
-// target both counting. Expired or unticked items on either side never count.
+// target both counting. With `sameEntity`, alike facts count only when both
+// items speak of a common entity (or one of them of none: facts linked
+// before entities, or that name none). Expired or unticked items on either
+// side never count.
 async function relatedItems(
   tx: Tx,
   workspaceId: string,
   proposal: typeof proposals.$inferSelect,
   which: "confirmed since" | "older pending",
   at: number,
+  sameEntity = false,
 ): Promise<Related[]> {
   const filter =
     which === "confirmed since"
@@ -653,7 +755,8 @@ async function relatedItems(
   }>(sql`
     with mine as (
       select i.id, i.target_fact_id,
-        f.embedding fe, f.embedding_model fm, t.embedding te, t.embedding_model tm
+        f.embedding fe, f.embedding_model fm, t.embedding te, t.embedding_model tm,
+        ${ENTITIES_OF_ITEM} ents
       from proposal_items i
       left join facts f on f.id = i.fact_id
       left join facts t on t.id = i.target_fact_id
@@ -663,7 +766,8 @@ async function relatedItems(
       select i.id, i.kind, i.position, i.target_fact_id, p.id proposal_id,
         p.created_by, p.created_at, p.decided_by, p.decided_at,
         f.content fact_content, t.content target_content,
-        f.embedding fe, f.embedding_model fm, t.embedding te, t.embedding_model tm
+        f.embedding fe, f.embedding_model fm, t.embedding te, t.embedding_model tm,
+        ${ENTITIES_OF_ITEM} ents
       from proposal_items i
       join proposals p on p.id = i.proposal_id
       left join facts f on f.id = i.fact_id
@@ -677,10 +781,11 @@ async function relatedItems(
       theirs.created_at, theirs.position
     from theirs join mine on
       mine.target_fact_id = theirs.target_fact_id
-      or (mine.fm = theirs.fm and 1 - (mine.fe <=> theirs.fe) >= ${at})
-      or (mine.fm = theirs.tm and 1 - (mine.fe <=> theirs.te) >= ${at})
-      or (mine.tm = theirs.fm and 1 - (mine.te <=> theirs.fe) >= ${at})
-      or (mine.tm = theirs.tm and 1 - (mine.te <=> theirs.te) >= ${at})
+      or (${sameEntity ? sql`(cardinality(mine.ents) = 0 or cardinality(theirs.ents) = 0 or mine.ents && theirs.ents)` : sql`true`} and (
+        (mine.fm = theirs.fm and 1 - (mine.fe <=> theirs.fe) >= ${at})
+        or (mine.fm = theirs.tm and 1 - (mine.fe <=> theirs.te) >= ${at})
+        or (mine.tm = theirs.fm and 1 - (mine.te <=> theirs.fe) >= ${at})
+        or (mine.tm = theirs.tm and 1 - (mine.te <=> theirs.te) >= ${at})))
     order by theirs.id, mine.id
   `);
   return (
@@ -739,6 +844,7 @@ async function expiringOf(
       proposal,
       "older pending",
       SAME_CLAIM_AT,
+      true,
     )
   ).map((row) => ({
     proposalId: row.proposalId,
@@ -808,7 +914,17 @@ async function cardOf(
   workspaceId: string,
   row: typeof proposals.$inferSelect,
 ): Promise<Proposal> {
-  const items = await itemsOf(tx, row.id);
+  const listed = await itemsOf(tx, row.id);
+  const { byFact, entities } = await entitiesOfFacts(
+    tx,
+    workspaceId,
+    listed.flatMap((item) => (item.factId ? [item.factId] : [])),
+    row.status === "pending",
+  );
+  const items = listed.map((item) => {
+    const ids = item.factId && byFact.get(item.factId);
+    return ids ? { ...item, entityIds: ids } : item;
+  });
   return {
     id: row.id,
     status: row.status,
@@ -816,6 +932,7 @@ async function cardOf(
     createdAt: row.createdAt.toISOString(),
     ...(row.decidedBy != null && { decidedBy: row.decidedBy }),
     items,
+    entities,
     ...(row.status === "pending" && {
       expires: await expiringOf(tx, workspaceId, row),
     }),
@@ -888,6 +1005,60 @@ export async function searchFacts(
 ): Promise<FactMatch[]> {
   const model = embeddings();
   const vector = await model.embedQuery(query);
+  return factMatches(
+    workspaceId,
+    vector,
+    eq(facts.embeddingModel, model.model),
+    limit,
+  );
+}
+
+/** A current confirmed fact the entity graph reached from a query. */
+export type GraphMatch = FactMatch & {
+  /** Relations walked from an entity the query names (0: it speaks of one). */
+  hops: number;
+};
+
+// Facts the graph lane looks at before ordering them.
+const GRAPH_CANDIDATES = 50;
+
+/**
+ * The current confirmed facts that speak of an entity the query names (by
+ * its name or an alias), or of an entity related to one within two hops
+ * through relations current facts state: fewest hops first, then most
+ * similar to the query.
+ */
+export async function searchGraph(
+  workspaceId: string,
+  query: string,
+  limit: number,
+): Promise<GraphMatch[]> {
+  const seeds = await entitiesNamedIn(workspaceId, query);
+  const reached = await graphFacts(workspaceId, seeds, GRAPH_CANDIDATES);
+  if (!reached.length) return [];
+  const hops = new Map(reached.map((r) => [r.factId, r.hops]));
+  const model = embeddings();
+  const vector = await model.embedQuery(query);
+  const matches = await factMatches(
+    workspaceId,
+    vector,
+    inArray(facts.id, [...hops.keys()]),
+    GRAPH_CANDIDATES,
+  );
+  return matches
+    .map((match) => ({ ...match, hops: hops.get(match.id)! }))
+    .sort((a, b) => a.hops - b.hops || b.similarity - a.similarity)
+    .slice(0, limit);
+}
+
+// The current confirmed facts matching the filter, most similar to the
+// vector first, with their sources and history chains.
+async function factMatches(
+  workspaceId: string,
+  vector: number[],
+  filter: SQL | undefined,
+  limit: number,
+): Promise<FactMatch[]> {
   const similarity = sql<number>`1 - (${cosineDistance(facts.embedding, vector)})`;
   const rows = await db
     .select({
@@ -908,13 +1079,7 @@ export async function searchFacts(
     .from(facts)
     .innerJoin(sources, eq(sources.id, facts.sourceId))
     .leftJoin(sourceChunks, eq(sourceChunks.id, facts.chunkId))
-    .where(
-      and(
-        eq(facts.workspaceId, workspaceId),
-        current,
-        eq(facts.embeddingModel, model.model),
-      ),
-    )
+    .where(and(eq(facts.workspaceId, workspaceId), current, filter))
     .orderBy(cosineDistance(facts.embedding, vector))
     .limit(limit);
   const histories = await historiesOf(

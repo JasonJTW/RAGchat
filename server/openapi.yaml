@@ -384,11 +384,19 @@ paths:
         place (the item's `target` then names it); when that chain ended in
         過時, a 過時 does nothing and a 取代's fact follows it. Confirming
         expires the pending items of older proposals that change the same
-        fact or make the same claim (cosine at least 0.9) as one of its
-        items: their `expiredBy` is this proposal and their facts never
+        fact or make the same claim about the same entity (cosine at least
+        0.9, and a common entity unless one side speaks of none) as one of
+        its items: their `expiredBy` is this proposal and their facts never
         enter the knowledge base; an older proposal with no live item left
         becomes `expired`. Confirmations of a workspace run one at a time,
         so of two rival proposals confirmed at once only one succeeds.
+
+
+        Each of `relinks` makes a new entity of the ticked items' facts
+        (see `Proposal.entities`, `new`) the existing entity the member
+        chose instead: those facts speak of it, their relations join it, and
+        the new entity's name becomes its 別名 (alias), so a question by
+        either name finds them.
       parameters:
         - $ref: "#/components/parameters/ProposalId"
       requestBody:
@@ -430,6 +438,25 @@ paths:
                   items:
                     type: string
                     format: uuid
+                relinks:
+                  type: array
+                  maxItems: 200
+                  description: >
+                    New entities of this proposal to relink to existing ones
+                  items:
+                    type: object
+                    required: [entityId, to]
+                    properties:
+                      entityId:
+                        type: string
+                        format: uuid
+                        description: A new entity of this proposal (`new` true), once each
+                      to:
+                        type: string
+                        format: uuid
+                        description: >
+                          Another live entity of the workspace, e.g. one of
+                          the entity's `candidates`
       responses:
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -444,8 +471,9 @@ paths:
         "400":
           description: >
             An edit or an excluded id names no item of this proposal, an
-            edit's text is blank or longer than 2000 characters, or every
-            item is excluded; nothing is decided
+            edit's text is blank or longer than 2000 characters, every
+            item is excluded, or a relink names no new entity of this
+            proposal or no other live entity; nothing is decided
           content:
             application/json:
               schema:
@@ -743,7 +771,7 @@ components:
       description: >
         A 提案: changes to the knowledge base waiting for a member. While
         `pending`, its facts are not in the knowledge base.
-      required: [id, status, createdBy, createdAt, items]
+      required: [id, status, createdBy, createdAt, items, entities]
       properties:
         id:
           type: string
@@ -785,6 +813,11 @@ components:
                 description: Its fact, or for 過時 the fact it would end
               createdBy:
                 type: string
+        entities:
+          type: array
+          description: The 實體 its items' facts speak of
+          items:
+            $ref: "#/components/schemas/ProposalEntity"
         items:
           type: array
           description: 取代 and 過時 items first, then 新增 ones
@@ -845,6 +878,54 @@ components:
                 description: >
                   The newer proposal whose confirmation expired the item
                   (已過期); it is then never confirmed
+              entityIds:
+                type: array
+                description: The entities its fact speaks of (ids in `entities`)
+                items:
+                  type: string
+                  format: uuid
+    ProposalEntity:
+      type: object
+      description: >
+        A 實體 a proposal's facts speak of. New until a confirmed fact speaks
+        of it: [連結實體] found no existing entity it means.
+      required: [id, name, kind, new]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        kind:
+          type: string
+          enum:
+            [
+              person,
+              project,
+              feature,
+              method,
+              module,
+              organization,
+              document,
+              other,
+            ]
+        new:
+          type: boolean
+          description: No confirmed fact speaks of it yet
+        candidates:
+          type: array
+          description: >
+            For a new entity of a pending proposal: existing entities with
+            alike names, most alike first, to relink it to on confirm
+          items:
+            type: object
+            required: [id, name]
+            properties:
+              id:
+                type: string
+                format: uuid
+              name:
+                type: string
     Conflict:
       type: object
       description: >

@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { eq } from "drizzle-orm";
+import { and, desc, eq, like, not, sql } from "drizzle-orm";
+import { getTableConfig } from "drizzle-orm/pg-core";
 import request from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
 import { app } from "./app.js";
@@ -11,6 +12,7 @@ import { installStubModels } from "./stub-models.js";
 import { stubSession } from "./stub-auth.js";
 import { db } from "./db.js";
 import { workspaces } from "./db/schema.js";
+import { workspaceTables } from "./demo-seed.js";
 import { deleteIdleTrials } from "./trial.js";
 
 // 訪客試用 through the HTTP API, signed in by stub cookies. Each test signs in
@@ -406,5 +408,116 @@ describe("GET /api/trial/example", () => {
 
     expect(res.status).toBe(200);
     expect(res.text).toContain("A = W × EF × R × L − T");
+  });
+});
+
+describe("a 訪客's question about the 示範資料's entities", () => {
+  // A query vector no stored fact or passage shares a direction with: the
+  // vector lane finds nothing, so whatever is cited came through the graph.
+  const blind = (question: string) => {
+    const vector = new Array<number>(1536).fill(0);
+    vector[1535] = 1;
+    const models = installStubModels();
+    models.vectors.set(question, vector);
+    models.chat.reply = "見 [1][2][3][4][5][6]";
+  };
+
+  it("finds the current formula by the algorithm's alias", async () => {
+    const question = "減碳計算模型現在怎麼算？";
+    blind(question);
+    const guest = await verifiedGuest();
+
+    const cited = await citedFacts(guest, question);
+
+    expect(cited.map((c) => c.text)).toContainEqual(
+      expect.stringContaining("A = W × EF × R × L"),
+    );
+  });
+
+  it("finds it a hop away, through who is responsible for the algorithm", async () => {
+    const question = "林小樹負責的那套現在怎麼算？";
+    blind(question);
+    const guest = await verifiedGuest();
+
+    const cited = await citedFacts(guest, question);
+
+    expect(cited.map((c) => c.text)).toContainEqual(
+      expect.stringContaining("A = W × EF × R × L"),
+    );
+  });
+
+  it("finds nothing when the question names no entity", async () => {
+    const question = "那個東西現在怎麼算？";
+    blind(question);
+    const guest = await verifiedGuest();
+
+    expect(await citedFacts(guest, question)).toEqual([]);
+  });
+});
+
+describe("copying the 示範資料 into a trial", () => {
+  it("copies every workspace table, #31's entities included, re-pointing every reference into the trial", async () => {
+    const userId = newGuest();
+    await verifiedGuest(userId);
+    const [trial] = await db
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(eq(workspaces.ownerId, userId));
+    const [template] = await db
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(
+        and(
+          eq(workspaces.kind, "demo"),
+          not(like(workspaces.name, "%(building)")),
+        ),
+      )
+      .orderBy(desc(workspaces.createdAt))
+      .limit(1);
+    const count = async (table: string, ws: string) =>
+      Number(
+        (
+          await db.execute<{ n: string }>(
+            sql`select count(*) n from ${sql.identifier(table)} where workspace_id = ${ws}`,
+          )
+        ).rows[0].n,
+      );
+
+    const tables = workspaceTables().map((t) => getTableConfig(t));
+    expect(tables.map((t) => t.name)).toEqual(
+      expect.arrayContaining([
+        "entities",
+        "entity_aliases",
+        "fact_entities",
+        "edges",
+      ]),
+    );
+    for (const { name, foreignKeys, columns } of tables) {
+      const copied = await count(name, trial.id);
+      expect(copied, name).toBe(await count(name, template.id));
+      if (
+        ["entities", "entity_aliases", "fact_entities", "edges"].includes(name)
+      )
+        expect(copied, name).toBeGreaterThan(0);
+      if (columns.some((c) => c.name === "id")) {
+        const { rows } = await db.execute(
+          sql`select 1 from ${sql.identifier(name)} a join ${sql.identifier(name)} b on a.id = b.id where a.workspace_id = ${trial.id} and b.workspace_id = ${template.id}`,
+        );
+        expect(rows, `${name} ids`).toEqual([]);
+      }
+      for (const fk of foreignKeys) {
+        const ref = fk.reference();
+        const target = getTableConfig(ref.foreignTable).name;
+        if (target === "workspaces") continue;
+        for (const [i, column] of ref.columns.entries()) {
+          const { rows } = await db.execute(sql`
+            select 1 from ${sql.identifier(name)} r
+            join ${sql.identifier(target)} t
+              on t.${sql.identifier(ref.foreignColumns[i].name)} = r.${sql.identifier(column.name)}
+            where r.workspace_id = ${trial.id} and t.workspace_id <> ${trial.id}`);
+          expect(rows, `${name}.${column.name} → ${target}`).toEqual([]);
+        }
+      }
+    }
   });
 });

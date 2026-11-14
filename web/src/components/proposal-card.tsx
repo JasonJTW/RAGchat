@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import type { Conflict, Proposal } from "@/lib/chat-message";
+import type { Conflict, Proposal, ProposalEntity } from "@/lib/chat-message";
 import { teamDate } from "@/lib/team-date";
 
 const KIND = { add: "新增", supersede: "取代", obsolete: "過時" } as const;
@@ -29,6 +29,10 @@ type Item = Proposal["items"][number];
  * ticked items with their edited texts over REST, 拒絕 rejects them all.
  * Nothing changes in the knowledge base until 確認.
  *
+ * Each item shows the 實體 its fact speaks of, new ones marked 新實體; a new
+ * entity with existing ones alike can be relinked to one of them, sent
+ * with 確認.
+ *
  * Before 確認 the card lists the older pending items confirming will expire;
  * items a newer proposal already expired show as 已過期, with no tick. When
  * the knowledge base changed since the proposal was made, 確認 is stopped
@@ -42,6 +46,8 @@ export function ProposalCard({ proposal }: { proposal: Proposal }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
+  // New entity id → the existing entity id the member relinks it to.
+  const [relinks, setRelinks] = useState<Record<string, string>>({});
   const pending = decided.status === "pending";
   // What it would expire was read when the card was made; once confirming
   // shows the knowledge base changed since, that list may be out of date.
@@ -77,6 +83,12 @@ export function ProposalCard({ proposal }: { proposal: Proposal }) {
             edits,
             excluded: [...unticked],
             acknowledged: conflicts.map((c) => c.changeId),
+            ...(Object.keys(relinks).length && {
+              relinks: Object.entries(relinks).map(([entityId, to]) => ({
+                entityId,
+                to,
+              })),
+            }),
           }),
         }),
       });
@@ -98,6 +110,12 @@ export function ProposalCard({ proposal }: { proposal: Proposal }) {
   }
 
   const items = pending ? proposal.items : decided.items;
+  const entities = new Map(
+    ((pending ? proposal : decided).entities ?? []).map((e) => [e.id, e]),
+  );
+  const relinkable = pending
+    ? [...entities.values()].filter((e) => e.new && e.candidates?.length)
+    : [];
   const changes = items.filter((item) => item.kind !== "add");
   const adds = items.filter((item) => item.kind === "add");
   const renderItem = (item: Item) => (
@@ -106,6 +124,14 @@ export function ProposalCard({ proposal }: { proposal: Proposal }) {
       item={item}
       pending={pending}
       text={texts[item.id]}
+      entities={(item.entityIds ?? []).flatMap((id) => {
+        const entity = entities.get(id);
+        if (!entity) return [];
+        const to =
+          relinks[id] &&
+          entities.get(id)?.candidates?.find((c) => c.id === relinks[id]);
+        return [to ? { ...entity, name: to.name, new: false } : entity];
+      })}
       ticked={!unticked.has(item.id)}
       disabled={busy}
       onTick={(on) => {
@@ -151,6 +177,37 @@ export function ProposalCard({ proposal }: { proposal: Proposal }) {
             {adds.map(renderItem)}
           </Group>
         ))}
+      {relinkable.length > 0 && (
+        <div aria-label="新實體" className="mt-3 text-sm text-zinc-600">
+          <p>新實體：若其實是知識庫裡既有的實體，請改連過去。</p>
+          <ul className="mt-1 space-y-1">
+            {relinkable.map((entity) => (
+              <li key={entity.id} className="flex items-center gap-2">
+                <span>{entity.name}</span>
+                <select
+                  aria-label={`「${entity.name}」連到`}
+                  className="rounded border bg-white px-1 py-0.5 text-sm"
+                  value={relinks[entity.id] ?? ""}
+                  disabled={busy}
+                  onChange={(e) => {
+                    const to = e.currentTarget.value;
+                    const next = { ...relinks, [entity.id]: to };
+                    if (!to) delete next[entity.id];
+                    setRelinks(next);
+                  }}
+                >
+                  <option value="">新建實體</option>
+                  {entity.candidates!.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {expires.length > 0 && (
         <div className="mt-3 text-sm text-zinc-600">
           <p>確認後，以下較早的待確認項目會過期：</p>
@@ -258,6 +315,7 @@ function ItemRow({
   item,
   pending,
   text,
+  entities,
   ticked,
   disabled,
   onTick,
@@ -266,6 +324,7 @@ function ItemRow({
   item: Item;
   pending: boolean;
   text: string | undefined;
+  entities: ProposalEntity[];
   ticked: boolean;
   disabled: boolean;
   onTick: (ticked: boolean) => void;
@@ -334,6 +393,27 @@ function ItemRow({
             {item.reason && <>原因：{item.reason} · </>}
             {item.effectiveAt && <>生效日期：{teamDate(item.effectiveAt)}</>}
           </p>
+        )}
+        {entities.length > 0 && (
+          <div
+            role="group"
+            aria-label="實體"
+            className="mt-1 flex flex-wrap gap-1"
+          >
+            {entities.map((entity) => (
+              <span
+                key={entity.id}
+                className={
+                  entity.new
+                    ? "rounded bg-amber-100 px-1.5 text-xs text-amber-900"
+                    : "rounded bg-zinc-200 px-1.5 text-xs text-zinc-700"
+                }
+              >
+                {entity.name}
+                {entity.new && <span className="ml-1 font-medium">新實體</span>}
+              </span>
+            ))}
+          </div>
         )}
         {left && <span className="text-xs">未納入</span>}
       </div>
