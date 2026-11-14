@@ -7,7 +7,7 @@ import {
   propose,
   searchFacts,
 } from "../knowledge-base.js";
-import { chatModel } from "../models.js";
+import { chatModel, embeddings } from "../models.js";
 import { teamDate, teamMidnight } from "../periods.js";
 import { type NodeConfig, purposeOf, type State, writeText } from "./state.js";
 
@@ -20,26 +20,44 @@ import { type NodeConfig, purposeOf, type State, writeText } from "./state.js";
 
 /** How many current facts a correction is matched against. */
 const CANDIDATES = 6;
+// Facts ranked before keeping the best; and how much closer a fact the last
+// answer cited counts as being (a correction usually answers an answer).
+const RANKED = 20;
+const CITED_BOOST = 0.1;
 
 /**
- * 定位目標事實: the current facts the correction may be about. The facts the
- * last answer cited come first, since a correction usually answers an
- * answer; then the facts most like the message.
+ * 定位目標事實: the current facts the correction may be about, the closest
+ * match to the message first. A fact the last answer cited counts as a
+ * little closer, so it goes ahead of one about as close; but a fact the
+ * message matches clearly better goes ahead of a cited one that only
+ * resembles it (two versions of a formula). A cited fact too far off to be
+ * ranked comes last.
  */
 export async function locateTargets(
   state: Pick<State, "workspaceId" | "correction" | "cited">,
 ): Promise<Pick<State, "candidates">> {
+  const vector = await embeddings().embedQuery(state.correction);
   const [cited, matched] = await Promise.all([
     currentFacts(state.workspaceId, state.cited.slice(0, CANDIDATES)),
-    searchFacts(state.workspaceId, state.correction, CANDIDATES),
+    searchFacts(state.workspaceId, vector, RANKED),
   ]);
-  const seen = new Set(cited.map((fact) => fact.id));
+  const wasCited = new Set(cited.map((fact) => fact.id));
+  const ranked = matched
+    .map(({ id, content, validFrom, similarity }) => ({
+      fact: { id, content, validFrom },
+      score: similarity + (wasCited.has(id) ? CITED_BOOST : 0),
+    }))
+    .sort((a, b) => b.score - a.score)
+    .map(({ fact }) => fact);
+  const seen = new Set(ranked.map((fact) => fact.id));
   const candidates = [
-    ...cited,
-    ...matched
-      .filter((fact) => !seen.has(fact.id))
-      .map(({ id, content, validFrom }) => ({ id, content, validFrom })),
+    ...ranked,
+    ...cited.filter((fact) => !seen.has(fact.id)),
   ].slice(0, CANDIDATES);
+  // A cited fact is kept even when six others rank higher.
+  for (const fact of cited)
+    if (!candidates.some((c) => c.id === fact.id))
+      candidates.splice(candidates.length - 1, 1, fact);
   return { candidates };
 }
 
@@ -57,6 +75,7 @@ export type CorrectionDraft = {
 
 const DRAFT_PROMPT = `你負責把團隊成員對知識庫的更正整理成修正提案。訊息會列出知識庫中編號的現行事實，以及成員的更正。
 - 只修正成員更正的事實，用它的編號指出；更正沒提到的事實不要動。找不到對應的事實時，回傳空的清單。
+- 事實依與更正的相近程度排列。幾則事實相像時（例如同一個公式的不同版本），選寫法與成員更正的內容相同的那一則，而不是只提到它的另一則。
 - 成員給了新的說法時是「取代」（supersede）：寫出取代後的完整事實，保留原事實其他部分的名稱、數字、公式與符號，只改成員更正的地方，不靠上下文也讀得懂。
 - 成員只說某事實不再成立、過時、停用，而沒給新說法時是「過時」（obsolete），content 留空。
 - reason：成員說的原因；沒說時寫成員更正的重點。

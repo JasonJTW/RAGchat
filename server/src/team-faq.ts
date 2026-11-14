@@ -165,14 +165,10 @@ export const TEAM_FAQ: FaqEntry[] = [
     id: "F3",
     question: "三月時我們的避免排放公式是什麼？",
     tests: "as-of",
-    contains: [/a=w×ef×r(?!×l)/],
-    // Known gap: the answer should go on to say it became × L from
-    // 2026-05-18 (#32), but that needs v1 replaced (取代) in history. The
-    // 輸入 subgraph doesn't yet tell 取代 from 新增 (#27's 比對衝突), and on
-    // the live run the member's 更正 was drafted against another formula
-    // fact, so v1 stays current with no later version. Add "×L" back here
-    // once either is fixed.
-    note: "As of March: v1 (seed 01, dated by its 最後更新 2026-03-02), not the × L formula of May.",
+    // v1 then, and that it became × L later (#32): the 示範資料 seeds v1's
+    // 取代 by the May meeting, which the 輸入 subgraph now proposes.
+    contains: [/a=w×ef×r(?!×l)/, "×L"],
+    note: "As of March: v1 (seed 01, dated by its 最後更新 2026-03-02); the answer goes on to say it became × L in May.",
   },
   {
     id: "F4",

@@ -36,11 +36,11 @@ async function known(...contents: string[]): Promise<string[]> {
 }
 
 describe("locateTargets", () => {
-  it("puts the facts the last answer cited first, then the ones the message matches", async () => {
+  it("ranks the facts by how closely they match the message, a cited fact ahead of one as close", async () => {
     stubs.vectors.set("R 代表取代率", [1, 0, 0]);
     stubs.vectors.set("L 代表壽命比", [0, 1, 0]);
     stubs.vectors.set("週會在週三", [0, 0, 1]);
-    stubs.vectors.set("R 不是取代率，是回收率", [1, 0.1, 0]);
+    stubs.vectors.set("R 不是取代率，是回收率", [1, 0.3, 0.3]);
     const [r, l, meeting] = await known(
       "R 代表取代率",
       "L 代表壽命比",
@@ -53,8 +53,33 @@ describe("locateTargets", () => {
       cited: [meeting],
     });
 
-    expect(candidates.map((c) => c.id)).toEqual([meeting, r, l]);
-    expect(candidates[1]).toMatchObject({ content: "R 代表取代率" });
+    expect(candidates.map((c) => c.id)).toEqual([r, meeting, l]);
+    expect(candidates[0]).toMatchObject({ content: "R 代表取代率" });
+  });
+
+  it("puts the fact the correction is about ahead of a cited fact that only resembles it", async () => {
+    // Two formula facts: the answer cited the PR's, the member corrects v1.
+    const V1 = "避免排放公式為 A = W × EF × R";
+    const PR = "PR #212 把避免排放公式 A = W × EF × R 乘上壽命比 L";
+    const CORRECTION =
+      "避免排放公式不是 A = W × EF × R，是 A = W × EF × R × 0.9";
+    stubs.vectors.set(V1, [1, 0.2, 0]);
+    stubs.vectors.set(PR, [0.6, 0.8, 0]);
+    stubs.vectors.set(CORRECTION, [1, 0.1, 0]);
+    const [v1, pr] = await known(V1, PR);
+
+    const { candidates } = await locateTargets({
+      workspaceId,
+      correction: CORRECTION,
+      cited: [pr],
+    });
+    const { drafts } = await draftCorrection({
+      correction: CORRECTION,
+      candidates,
+    });
+
+    expect(candidates.map((c) => c.id)).toEqual([v1, pr]);
+    expect(drafts.map((d) => d.target.id)).toEqual([v1]);
   });
 
   it("ignores cited ids that are not current facts of the workspace", async () => {

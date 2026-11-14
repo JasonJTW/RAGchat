@@ -115,6 +115,22 @@ describe("grading an answer to a team FAQ question", () => {
     ]);
   });
 
+  it("expects the March formula, and that it became × L later (F3)", () => {
+    const asOf = TEAM_FAQ.find((entry) => entry.id === "F3")!;
+    expect(
+      grade(asOf, {
+        text: "三月時是 A = W × EF × R [1]。",
+        citations: [fact()],
+      }),
+    ).toEqual(["missing: ×L"]);
+    expect(
+      grade(asOf, {
+        text: "三月時是 A = W × EF × R [1]，2026-05-18 起改為 A = W × EF × R × L。",
+        citations: [fact()],
+      }),
+    ).toEqual([]);
+  });
+
   describe("a refusal question", () => {
     const refusal: FaqEntry = {
       id: "F10",
