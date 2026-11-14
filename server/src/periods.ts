@@ -106,20 +106,33 @@ export function teamMidnight(date: string | null | undefined): number {
     : NaN;
 }
 
+// What makes a named time the time asked about, rather than a date the
+// question merely mentions (「2026-11-12 週會決議…」): 「…時」「…的時候」
+// 「…當時」「…以前」 after it, or 「在」「截至」「到」 before it.
+const AT_THAT_TIME =
+  /^\s*[日號份]?\s*的?\s*(?:時候|時|當時|那時|那天|那週|那個月|那年|那陣子|以前|之前|為止)/;
+const AS_OF = /(?:在|於|截至|截止|到)\s*$/;
+
 /**
- * The past period the text asks about, or undefined when it names none, or
- * one that has not ended yet (今年, this month, the future): that is a
- * question about now.
+ * The past period the text asks about: a time it names as the time asked
+ * about (「三月時」「截至 2026-05-14」, see AT_THAT_TIME). Undefined when it
+ * names none, or one that has not ended yet (今年, this month, the
+ * future): that is a question about now.
  */
 export function periodAsked(text: string, now: Date): Period | undefined {
   const today = todayOf(now);
-  for (const { re, read } of PATTERNS) {
-    const match = re.exec(text);
-    if (!match) continue;
-    const period = read(match, today);
-    if (!period || Number.isNaN(period.to.getTime())) return undefined;
-    return period.to.getTime() > now.getTime() ? undefined : period;
-  }
+  for (const { re, read } of PATTERNS)
+    for (const match of text.matchAll(new RegExp(re.source, "g"))) {
+      const end = match.index + match[0].length;
+      if (
+        !AT_THAT_TIME.test(text.slice(end)) &&
+        !AS_OF.test(text.slice(0, match.index))
+      )
+        continue;
+      const period = read(match, today);
+      if (!period || Number.isNaN(period.to.getTime())) return undefined;
+      return period.to.getTime() > now.getTime() ? undefined : period;
+    }
   return undefined;
 }
 

@@ -68,8 +68,22 @@
     {
       "idx": 9,
       "version": "7",
-      "when": 1794631309508,
-      "tag": "0009_fixed_rage",
+      "when": 1794630990645,
+      "tag": "0009_unique_shooting_star",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794631525409,
+      "tag": "0010_guest_trials",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1794632114605,
+      "tag": "0011_wild_maria_hill",
       "breakpoints": true
     }
   ]

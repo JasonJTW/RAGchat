@@ -17,7 +17,13 @@ import {
 import { chatModel, systemOne } from "../models.js";
 import { periodAsked, teamDate } from "../periods.js";
 import { KnowledgeRetriever, type RetrievedFact } from "../retriever.js";
-import { type NodeConfig, type State, type Turn, writeText } from "./state.js";
+import {
+  type NodeConfig,
+  purposeOf,
+  type State,
+  type Turn,
+  writeText,
+} from "./state.js";
 
 // The 提問 branch: [Jev 檢查] and [檢索] side by side, then [回答＋引用].
 
@@ -82,12 +88,14 @@ const SYSTEM_PROMPT = `你是「大量交織 megaweaving」團隊 wiki 的助理
 - 每個事實後面用段落編號標出處，例如 [1]、[2]；只標你實際用到的段落，不要另寫「出處：」。
 - 只有當段落對同一件事給出不同說法時（例如人數不同）：先給最新且有日期的說法，再列出其他說法的具體數字與各自的年份、來源，並說明這些說法未經確認。說法一致時不要提矛盾。
 - 例外：段落完全沒有提到問題要問的事時，不要作答，整個回覆只寫這一句（不加段落編號）：${REFUSAL}
-  段落有答案時，照上面的規則完整回答，不要寫這一句。`;
+  段落有答案時，照上面的規則完整回答，不要寫這一句。
+- 〔人名1〕、〔電話2〕這類括號標記是代稱，代表一個人名、電話等：回答裡照原樣寫出代稱（含括號），不要改寫、拆開或猜它代表誰。`;
 
 const REWRITE_PROMPT = `把使用者的最新問題改寫成一句不需要上文也看得懂的獨立問題：把代名詞與省略的主詞換成對話裡指的那件事。
 - 只輸出改寫後的問題，不要回答、不要解釋。
 - 一律用繁體中文。
-- 最新問題本身已經完整時，原樣輸出。`;
+- 最新問題本身已經完整時，原樣輸出。
+- 〔人名1〕、〔電話2〕這類括號標記是代稱，代表一個人名、電話等：照原樣保留。`;
 
 // Asked of Jev about a first question. Validated on the team FAQ's first
 // questions (ticket #33); the examples must stay clear of those questions.
@@ -169,10 +177,11 @@ export async function checkSubject(
  * rewritten into a standalone question.
  */
 export async function retrieve(
-  state: Pick<State, "workspaceId" | "turns" | "message">,
+  state: Pick<State, "workspaceId" | "turns" | "message"> &
+    Partial<Pick<State, "role">>,
 ): Promise<Pick<State, "evidence" | "similarity">> {
   const query = state.turns.length
-    ? await standaloneQuestion(state.turns, state.message)
+    ? await standaloneQuestion(state.turns, state.message, state)
     : state.message;
   // The member's own words first; a rewrite may bring in an earlier turn's.
   const now = new Date();
@@ -313,7 +322,7 @@ export async function answer(
     State,
     "turns" | "message" | "clarify" | "evidence" | "similarity"
   > &
-    Partial<Pick<State, "proposal">>,
+    Partial<Pick<State, "proposal" | "role">>,
   config: NodeConfig = {},
 ): Promise<Pick<State, "reply" | "citations">> {
   // A correction proposed in this turn (the message also corrected).
@@ -327,7 +336,7 @@ export async function answer(
       citations: [],
     };
   }
-  const stream = await chatModel("answer").stream(
+  const stream = await chatModel(purposeOf(state, "answer")).stream(
     [
       new SystemMessage(SYSTEM_PROMPT),
       ...state.turns.map((turn) =>
@@ -380,8 +389,9 @@ export async function answer(
 async function standaloneQuestion(
   turns: Turn[],
   question: string,
+  caller: Partial<Pick<State, "role">>,
 ): Promise<string> {
-  const { text } = await chatModel("answer").invoke([
+  const { text } = await chatModel(purposeOf(caller, "answer")).invoke([
     new SystemMessage(REWRITE_PROMPT),
     new HumanMessage(
       `對話：\n${turns

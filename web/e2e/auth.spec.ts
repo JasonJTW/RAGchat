@@ -28,14 +28,14 @@ test("a visitor who is not signed in reaches no knowledge base API", async ({
   ).toBe(401);
 });
 
-test("a signed-in 訪客 is told guest trials are not open yet", async ({
+test("a signed-in 訪客 reaches no knowledge base API before the human check", async ({
   page,
 }) => {
-  await signIn(page, "guest");
+  await signIn(page, "guest", `user_e2e_guest_${Date.now()}`);
 
   await page.goto("/");
 
-  await expect(page.getByRole("main")).toContainText("訪客試用尚未開放");
+  await expect(page.getByRole("button", { name: /開始試用/ })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "問題" })).toHaveCount(0);
   const chat = await page.request.post("/api/chat", { data: { messages: [] } });
   expect(chat.status()).toBe(403);

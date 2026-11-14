@@ -22,6 +22,8 @@
     "@langchain/core": "^1.4.1",
     "@langchain/langgraph": "^1.7.4",
     "@langchain/openai": "^1.8.4",
+    "@secretlint/core": "^13.1.0",
+    "@secretlint/secretlint-rule-preset-recommend": "^13.1.0",
     "@typesafe-ai/sdk": "^0.7.0",
     "ai": "^7.0.172",
     "cors": "^2.8.6",
@@ -36,6 +38,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
+    "@secretlint/types": "^13.1.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/multer": "^2.3.0",
