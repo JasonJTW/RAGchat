@@ -84,20 +84,21 @@ test("a reopened conversation shows its proposal card as it stands now", async (
     new URL(location.href).searchParams.get("c"),
   );
 
-  // Confirmed elsewhere (another tab, the /proposals page).
+  // Decided elsewhere (another tab, the /proposals page); rejected, so no
+  // fact is left in the team knowledge base other specs answer from.
   const pending = (await (await page.request.get("/api/proposals")).json()) as {
     id: string;
     items: { content?: string }[];
   }[];
   const proposal = pending.find((p) => p.items[0]?.content === fact)!;
   expect(
-    (await page.request.post(`/api/proposals/${proposal.id}/confirm`)).ok(),
+    (await page.request.post(`/api/proposals/${proposal.id}/reject`)).ok(),
   ).toBe(true);
 
   await page.goto(`/?c=${id}`);
   const reopened = page
     .getByRole("article", { name: "回答" })
     .getByRole("region", { name: "提案" });
-  await expect(reopened).toContainText("已確認，已寫入知識庫。");
+  await expect(reopened).toContainText("已拒絕，沒有寫入知識庫。");
   await expect(reopened.getByRole("button", { name: "確認" })).toHaveCount(0);
 });
