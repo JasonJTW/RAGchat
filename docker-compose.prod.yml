@@ -1,0 +1,122 @@
+# Production on the team's Ubuntu server (docs/deploy.md):
+#   docker compose -f docker-compose.prod.yml up -d --build --wait
+# A project of its own (`ragchat-prod`), apart from the dev/test `ragchat` one
+# in docker-compose.yml. Nothing is published to the network: Cloudflare Tunnel
+# (cloudflared, profile `tunnel`) carries every request to web, and web is
+# bound to 127.0.0.1 only for checks on the host itself.
+# Settings come from the .env beside this file (mode 600); see .env.example.
+name: ragchat-prod
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.1-pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ragchat
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ragchat
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ragchat -d ragchat"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # Presidio Analyzer (ADR-0004). Stateless: no volume, nothing to back up.
+  # Only the server reaches it, on the compose network.
+  presidio:
+    image: mcr.microsoft.com/presidio-analyzer:2.2.362
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:3000/health'')"',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    # Model, Clerk, Jev, Turnstile and pseudonym keys. The values below win.
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      DATABASE_URL: postgres://ragchat:${POSTGRES_PASSWORD}@postgres:5432/ragchat
+      PRESIDIO_URL: http://presidio:3000
+      # Real analyzer, real models, real sign-in: the test switches stay off.
+      PII_ANALYZER: ""
+      STUB_AUTH: ""
+      STUB_MODELS: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+      presidio:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:4000/api/me').then(()=>process.exit(0),()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+      args:
+        # Built into the bundle: rebuild after changing them.
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}
+        SERVER_URL: http://server:4000
+    restart: unless-stopped
+    # Only what the web app reads; the model and pseudonym keys stay with the server.
+    environment:
+      NODE_ENV: production
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
+      SERVER_URL: http://server:4000
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
+    depends_on:
+      server:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3000/sign-in').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # Cloudflare Tunnel: an outbound connection to Cloudflare, so the host opens
+  # no port. Starts only with the `tunnel` profile (COMPOSE_PROFILES=tunnel in
+  # .env), once CLOUDFLARE_TUNNEL_TOKEN is set; the public hostname's service
+  # is http://web:3000 (set in the Cloudflare dashboard).
+  cloudflared:
+    image: cloudflare/cloudflared:2026.10.7
+    profiles: [tunnel]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      web:
+        condition: service_healthy
+
+volumes:
+  postgres:

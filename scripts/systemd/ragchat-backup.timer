@@ -1,0 +1,12 @@
+# Runs ragchat-backup.service every day at 03:30 (server time); a run missed
+# while the server was off happens at the next boot.
+[Unit]
+Description=RAGchat daily database backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

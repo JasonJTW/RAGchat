@@ -1,0 +1,18 @@
+# The build context is the repo root (npm workspaces share one lockfile).
+# Secrets never enter an image: the .env stays on the host and reaches the
+# containers at run time through docker-compose.prod.yml.
+.env
+.env*
+!.env.example
+**/node_modules
+**/.next
+**/.next-e2e
+**/dist
+**/*.tsbuildinfo
+**/test-results
+**/playwright-report
+.git
+.scratch
+.claude
+.agents
+docs
