@@ -73,7 +73,7 @@ Fill in:
 | `CLOUDFLARE_TUNNEL_TOKEN`, `COMPOSE_PROFILES=tunnel`                                                          | Cloudflare Tunnel             |
 | `BACKUP_DIR`, optional `BACKUP_RCLONE_REMOTE`                                                                 | see [Backups](#backups)       |
 
-Leave out `DATABASE_URL`, `PRESIDIO_URL`, `PII_ANALYZER`, `STUB_AUTH` and `STUB_MODELS`: Compose sets the first two to its own services and turns the test switches off.
+Leave out `DATABASE_URL`, `PRESIDIO_URL`, `PII_ANALYZER`, `STUB_AUTH`, `STUB_MODELS` and `STUB_TURNSTILE`: Compose sets the first two to its own services and turns the test switches off.
 
 `NEXT_PUBLIC_*` values are built into the web image. After changing one, rebuild: `prod up -d --build --wait`.
 

@@ -20,6 +20,8 @@ COPY web/package.json web/
 RUN npm ci --ignore-scripts --omit=dev --workspace server && npm cache clean --force
 COPY --from=build /app/server/dist server/dist
 COPY server/drizzle server/drizzle
+# Read at run time: the 訪客 trial seed and the example upload.
+COPY server/demo-data server/demo-data
 USER node
 WORKDIR /app/server
 EXPOSE 4000

@@ -54,6 +54,7 @@ services:
       PII_ANALYZER: ""
       STUB_AUTH: ""
       STUB_MODELS: ""
+      STUB_TURNSTILE: ""
     depends_on:
       postgres:
         condition: service_healthy
