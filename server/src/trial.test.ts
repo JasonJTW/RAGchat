@@ -437,6 +437,27 @@ describe("GET /api/trial/example", () => {
   });
 });
 
+describe("a 訪客 uploading the example file", () => {
+  it("is proposed a 取代 of the seed's current formula", async () => {
+    const guest = await verifiedGuest();
+
+    const [proposal] = await uploadExample(guest);
+
+    const replaced = proposal.items.filter((i) => i.kind === "supersede");
+    expect(replaced).toEqual([
+      expect.objectContaining({
+        content: expect.stringContaining("A = W × EF × R × L − T") as unknown,
+        target: expect.objectContaining({
+          content: expect.stringMatching(
+            /^避免排放公式為 A = W × EF × R × L，/,
+          ) as unknown,
+        }) as unknown,
+        reason: expect.any(String) as unknown,
+      }),
+    ]);
+  });
+});
+
 describe("a 訪客's question about the 示範資料's entities", () => {
   // A query vector no stored fact or passage shares a direction with: the
   // vector lane finds nothing, so whatever is cited came through the graph.

@@ -25,7 +25,7 @@ export interface StubChat {
    * the last message's text. By default, for the name "correction" it
    * corrects as `stubCorrections` does; for "entities" it names entities as
    * `stubEntities` does; for "entity-link" it makes every mention a new
-   * entity; otherwise it extracts facts: each sentence (split at 。 and
+   * entity; for "comparison" it compares as `stubComparison` does; otherwise it extracts facts: each sentence (split at 。 and
    * line breaks) is one fact.
    */
   structured: (text: string, name?: string) => unknown;
@@ -80,7 +80,9 @@ export function installStubModels(): {
           ? stubEntities(text)
           : name === "entity-link"
             ? { links: [] }
-            : sentencesAsFacts(text),
+            : name === "comparison"
+              ? stubComparison(text)
+              : sentencesAsFacts(text),
     structuredPrompts: [],
     models: [],
   };
@@ -299,6 +301,42 @@ function stubCorrections(text: string) {
           },
         ]
       : [],
+  };
+}
+
+/**
+ * The default comparison, read from 比對衝突's message (agent/input.ts): a
+ * new fact stating a formula 「X = …」 replaces the first listed current
+ * fact stating one for the same X with another right-hand side; every other
+ * new fact is 新增.
+ */
+function stubComparison(text: string) {
+  const formula = (content: string) => {
+    const match = /(?:^|[\s：:為])([A-Za-z])\s*=\s*([^，。；,;\n]+)/.exec(
+      content,
+    );
+    return match && { lhs: match[1], rhs: match[2].trim() };
+  };
+  const current = [...text.matchAll(/^\[(\d+)\] (.*)$/gm)].map(
+    ([, n, content]) => ({ n: Number(n), formula: formula(content) }),
+  );
+  return {
+    facts: [...text.matchAll(/^\((\d+)\) (.*)$/gm)].map(([, n, content]) => {
+      const mine = formula(content);
+      const target =
+        mine &&
+        current.find(
+          (c) => c.formula?.lhs === mine.lhs && c.formula.rhs !== mine.rhs,
+        );
+      return target
+        ? {
+            fact: Number(n),
+            kind: "supersede",
+            target: target.n,
+            reason: `${mine.lhs} 改為 ${mine.rhs}`,
+          }
+        : { fact: Number(n), kind: "add", target: null, reason: null };
+    }),
   };
 }
 

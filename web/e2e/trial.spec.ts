@@ -41,6 +41,13 @@ test("a 訪客 gets the 示範資料, example questions and the example file", a
   await expect(card.getByRole("button", { name: /確認/ }).first()).toBeVisible({
     timeout: 30_000,
   });
+  // The example replaces the seed's formula.
+  await expect(card.getByRole("heading")).toContainText("取代");
+  const replaced = card
+    .getByRole("listitem")
+    .filter({ has: page.getByLabel("新", { exact: true }) })
+    .filter({ hasText: "A = W × EF × R × L − T" });
+  await expect(replaced.getByLabel("舊")).toContainText("A = W × EF × R × L，");
   // A 訪客's trial is not de-identified: no 敏感詞 to mark.
   await expect(card.getByText("標記敏感詞")).toHaveCount(0);
   await page.screenshot({ path: test.info().outputPath("trial-upload.png") });

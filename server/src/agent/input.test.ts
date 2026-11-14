@@ -2,13 +2,14 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  confirmProposal,
   propose as proposeFacts,
   searchChunks,
   searchFacts,
 } from "../knowledge-base.js";
 import { installStubModels } from "../stub-models.js";
 import { createWorkspace } from "../workspaces.js";
-import { chunk, extract, propose, toText } from "./input.js";
+import { chunk, compare, extract, propose, toText } from "./input.js";
 
 // The 輸入 subgraph's nodes, each from a state in to the keys it sets.
 
@@ -292,6 +293,115 @@ describe("extract", () => {
     // The hint goes with the rules, before the content.
     expect(hinted.split(text)[0]).toContain(hint);
     expect(unhinted.split("倉庫在三樓")[0]).not.toContain(hint);
+  });
+});
+
+describe("compare", () => {
+  const FORMULA = "避免排放公式為 A = W × EF × R × L，L 為壽命比";
+  const OWNER = "避免排放算法的負責人是林小樹";
+
+  async function withFacts(...texts: string[]) {
+    const workspaceId = await createWorkspace("guest", "test");
+    const proposal = await proposeFacts(workspaceId, "user-a", {
+      source: { kind: "message", content: texts.join("\n") },
+      facts: texts.map((content) => ({
+        content,
+        validFrom: "2026-05-17T16:00:00.000Z",
+      })),
+    });
+    await confirmProposal(workspaceId, proposal.id, "user-a");
+    const ids = new Map(
+      proposal.items.map((item) => [item.content!, item.factId!]),
+    );
+    return { workspaceId, ids };
+  }
+
+  const message = (...facts: { content: string; validFrom?: string }[]) => ({
+    source: { kind: "message" as const, content: "x" },
+    chunks: [],
+    facts,
+  });
+
+  it("marks a fact replacing a current one as 取代, from when it holds, and leaves the rest new", async () => {
+    const models = installStubModels();
+    const { workspaceId, ids } = await withFacts(FORMULA, OWNER);
+    const replacing = "公式改為 A = W × EF × R × L − T";
+
+    const out = await compare({
+      workspaceId,
+      inputs: [
+        message(
+          { content: replacing, validFrom: "2026-11-11T16:00:00.000Z" },
+          { content: "T 為取件運送排放" },
+        ),
+      ],
+    });
+
+    expect(out.inputs[0].facts).toEqual([
+      {
+        content: replacing,
+        validFrom: "2026-11-11T16:00:00.000Z",
+        replaces: {
+          target: expect.objectContaining({
+            id: ids.get(FORMULA),
+            content: FORMULA,
+          }) as unknown,
+          reason: expect.any(String) as unknown,
+        },
+      },
+      { content: "T 為取件運送排放" },
+    ]);
+    // The model saw the current facts by number and the new ones apart.
+    expect(models.chat.structuredPrompts.at(-1)).toMatch(
+      /\[\d\] 避免排放公式為[\s\S]*新事實：\n\(1\) 公式改為/,
+    );
+  });
+
+  it("keeps 補充 and 新增 new, and lets a current fact be replaced only once", async () => {
+    const models = installStubModels();
+    const { workspaceId } = await withFacts(FORMULA);
+    models.chat.structured = () => ({
+      facts: [
+        { fact: 1, kind: "supplement", target: 1, reason: null },
+        { fact: 2, kind: "supersede", target: 1, reason: "改了" },
+        { fact: 3, kind: "supersede", target: 1, reason: "又改了" },
+        { fact: 4, kind: "supersede", target: 9, reason: "沒有這則" },
+      ],
+    });
+
+    const out = await compare({
+      workspaceId,
+      inputs: [
+        message(
+          { content: "壽命比 L 依品類估計" },
+          { content: "A = W × EF × R", validFrom: "2026-01-01T00:00:00.000Z" },
+          { content: "A = W × R" },
+          { content: "A = 1" },
+        ),
+      ],
+    });
+
+    expect(out.inputs[0].facts.map((f) => f.replaces?.reason)).toEqual([
+      undefined,
+      "改了",
+      undefined,
+      undefined,
+    ]);
+    // Never before the fact it replaces began to hold.
+    expect(out.inputs[0].facts[1].validFrom).toBe("2026-05-17T16:00:00.000Z");
+  });
+
+  it("asks no model when the knowledge base has no facts yet", async () => {
+    const models = installStubModels();
+    const workspaceId = await createWorkspace("guest", "test");
+
+    const out = await compare({
+      workspaceId,
+      inputs: [message({ content: "A = W × EF × R" })],
+    });
+
+    expect(out.inputs[0].facts).toEqual([{ content: "A = W × EF × R" }]);
+    expect(models.chat.structuredPrompts).toEqual([]);
   });
 });
 

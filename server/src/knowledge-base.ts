@@ -210,14 +210,27 @@ export type FactDraft =
       validFrom?: string;
     };
 
-/** A change to a current fact proposed by a correction. */
+/**
+ * A change to a current fact proposed by a correction, or by an input whose
+ * fact replaces it. A replacing fact drawn from a file may name its passage
+ * (`chunk`) and the entities it speaks of, as a `FactDraft` does.
+ */
 export type Correction = {
   /** A current confirmed fact of the workspace. */
   targetFactId: string;
   reason: string;
   /** When the change took effect (ISO). */
   effectiveAt: string;
-} & ({ kind: "supersede"; content: string } | { kind: "obsolete" });
+} & (
+  | {
+      kind: "supersede";
+      content: string;
+      chunk?: number;
+      entities?: Mention[];
+      relations?: Relation[];
+    }
+  | { kind: "obsolete" }
+);
 
 // A fact in the knowledge base now: confirmed, and not replaced or 過時.
 const current = and(eq(facts.status, "confirmed"), isNull(facts.validTo));
@@ -274,7 +287,15 @@ export async function propose(
   }[] = [
     ...corrections.flatMap((c) =>
       c.kind === "supersede"
-        ? [{ content: c.content, validFrom: new Date(c.effectiveAt) }]
+        ? [
+            {
+              content: c.content,
+              validFrom: new Date(c.effectiveAt),
+              chunk: c.chunk,
+              entities: c.entities,
+              relations: c.relations,
+            },
+          ]
         : [],
     ),
     ...input.facts.map((fact) =>
@@ -1218,17 +1239,19 @@ async function itemsOf(tx: Tx, proposalId: string): Promise<ProposalItem[]> {
 /**
  * The current confirmed facts most similar to the query, best first, each
  * with its history chain when it has one; for a past period, the facts that
- * held then. Facts embedded by another model than EMBEDDING_MODEL can't be
- * compared and are skipped.
+ * held then. The query is text, or its embedding by EMBEDDING_MODEL. Facts
+ * embedded by another model than EMBEDDING_MODEL can't be compared and are
+ * skipped.
  */
 export async function searchFacts(
   workspaceId: string,
-  query: string,
+  query: string | number[],
   limit: number,
   during?: Period,
 ): Promise<FactMatch[]> {
   const model = embeddings();
-  const vector = await model.embedQuery(query);
+  const vector =
+    typeof query === "string" ? await model.embedQuery(query) : query;
   return factMatches(
     workspaceId,
     vector,
