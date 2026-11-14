@@ -208,6 +208,8 @@ export type FactDraft =
        * from when the source was given.
        */
       validFrom?: string;
+      /** Its embedding by EMBEDDING_MODEL, when made already. */
+      embedding?: number[];
     };
 
 /**
@@ -230,7 +232,9 @@ const asQuestion = (query: string | Question) =>
 /**
  * A change to a current fact proposed by a correction, or by an input whose
  * fact replaces it. A replacing fact drawn from a file may name its passage
- * (`chunk`) and the entities it speaks of, as a `FactDraft` does.
+ * (`chunk`), the entities it speaks of and its embedding, as a `FactDraft`
+ * does; with `orAdd`, it is proposed as 新增 when its target is no longer
+ * current, instead of failing the proposal.
  */
 export type Correction = {
   /** A current confirmed fact of the workspace. */
@@ -245,6 +249,8 @@ export type Correction = {
       chunk?: number;
       entities?: Mention[];
       relations?: Relation[];
+      embedding?: number[];
+      orAdd?: boolean;
     }
   | { kind: "obsolete" }
 );
@@ -299,6 +305,7 @@ export async function propose(
     chunk?: number;
     entities?: Mention[];
     relations?: Relation[];
+    embedding?: number[];
   }[] = [
     ...corrections.flatMap((c) =>
       c.kind === "supersede"
@@ -309,6 +316,7 @@ export async function propose(
               chunk: c.chunk,
               entities: c.entities,
               relations: c.relations,
+              embedding: c.embedding,
             },
           ]
         : [],
@@ -331,12 +339,17 @@ export async function propose(
       added.flatMap((fact) => (fact.entities ?? []).map((m) => m.name)),
     ),
   ];
+  // Facts embedded already (by 比對衝突) are not embedded again.
+  const unembedded = added.filter((fact) => !fact.embedding);
   const texts = [
-    ...added.map((fact) => fact.content),
+    ...unembedded.map((fact) => fact.content),
     ...chunks.map((chunk) => chunk.embedText),
     ...names,
   ];
-  const vectors = texts.length ? await model.embedDocuments(texts) : [];
+  const embedded = texts.length ? await model.embedDocuments(texts) : [];
+  let e = 0;
+  const factVectors = added.map((fact) => fact.embedding ?? embedded[e++]);
+  const vectors = [...factVectors, ...embedded.slice(unembedded.length)];
   return db.transaction(async (tx) => {
     // Waits for a decision in progress to commit, so the proposal is made
     // either before it (and re-checked against it at confirm) or after it,
@@ -345,11 +358,20 @@ export async function propose(
     await tx.execute(
       sql`select pg_advisory_xact_lock_shared(hashtext('decide'), hashtext(${workspaceId}))`,
     );
-    const targetIds = corrections.map((c) => c.targetFactId);
-    if (
-      (await currentFacts(workspaceId, targetIds, tx)).length !==
-      new Set(targetIds).size
-    )
+    const live = new Set(
+      (
+        await currentFacts(
+          workspaceId,
+          corrections.map((c) => c.targetFactId),
+          tx,
+        )
+      ).map((fact) => fact.id),
+    );
+    // A 取代 whose target is gone, proposed as 新增 when it may be.
+    const demoted = corrections.map(
+      (c) => !live.has(c.targetFactId) && c.kind === "supersede" && !!c.orAdd,
+    );
+    if (corrections.some((c, i) => !live.has(c.targetFactId) && !demoted[i]))
       throw new Error("a correction's target is not a current fact");
     const [source] = await tx
       .insert(sources)
@@ -408,12 +430,15 @@ export async function propose(
       (name) => vectors[nameAt + names.indexOf(name)],
     );
     // A replacement speaks of what the fact it replaces did.
+    const supersedes = corrections.flatMap((c, i) =>
+      c.kind === "supersede" ? [{ c, demoted: demoted[i] }] : [],
+    );
     await inheritEntities(
       tx,
       workspaceId,
-      corrections
-        .filter((c) => c.kind === "supersede")
-        .map((c, i) => ({ factId: factIds[i], fromFactId: c.targetFactId })),
+      supersedes.flatMap(({ c, demoted }, i) =>
+        demoted ? [] : [{ factId: factIds[i], fromFactId: c.targetFactId }],
+      ),
     );
     const [proposal] = await tx
       .insert(proposals)
@@ -425,22 +450,33 @@ export async function propose(
       })
       .returning();
     let next = 0;
+    const changes = corrections.flatMap((c, i) => {
+      const factId = c.kind === "supersede" ? factIds[next++] : null;
+      return demoted[i]
+        ? []
+        : [
+            {
+              workspaceId,
+              proposalId: proposal.id,
+              kind: c.kind,
+              factId,
+              targetFactId: c.targetFactId,
+              reason: c.reason,
+              effectiveAt: new Date(c.effectiveAt),
+            },
+          ];
+    });
+    const changed = new Set(changes.map((item) => item.factId));
     const items = [
-      ...corrections.map((c) => ({
-        workspaceId,
-        proposalId: proposal.id,
-        kind: c.kind,
-        factId: c.kind === "supersede" ? factIds[next++] : null,
-        targetFactId: c.targetFactId,
-        reason: c.reason,
-        effectiveAt: new Date(c.effectiveAt),
-      })),
-      ...factIds.slice(next).map((factId) => ({
-        workspaceId,
-        proposalId: proposal.id,
-        kind: "add" as const,
-        factId,
-      })),
+      ...changes,
+      ...factIds
+        .filter((factId) => !changed.has(factId))
+        .map((factId) => ({
+          workspaceId,
+          proposalId: proposal.id,
+          kind: "add" as const,
+          factId,
+        })),
     ];
     await tx
       .insert(proposalItems)

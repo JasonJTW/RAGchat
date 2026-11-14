@@ -296,6 +296,10 @@ describe("extract", () => {
   });
 });
 
+// A compared fact without its embedding (kept for [建立提案]).
+const unembedded = <T extends object>(facts: T[]) =>
+  facts.map((fact) => ({ ...fact, embedding: undefined }));
+
 describe("compare", () => {
   const FORMULA = "避免排放公式為 A = W × EF × R × L，L 為壽命比";
   const OWNER = "避免排放算法的負責人是林小樹";
@@ -337,7 +341,7 @@ describe("compare", () => {
       ],
     });
 
-    expect(out.inputs[0].facts).toEqual([
+    expect(unembedded(out.inputs[0].facts)).toEqual([
       {
         content: replacing,
         validFrom: "2026-11-11T16:00:00.000Z",
@@ -400,8 +404,138 @@ describe("compare", () => {
       inputs: [message({ content: "A = W × EF × R" })],
     });
 
-    expect(out.inputs[0].facts).toEqual([{ content: "A = W × EF × R" }]);
+    expect(unembedded(out.inputs[0].facts)).toEqual([
+      { content: "A = W × EF × R" },
+    ]);
     expect(models.chat.structuredPrompts).toEqual([]);
+  });
+});
+
+describe("compare, at scale and against a misled model", () => {
+  async function withConfirmed(...texts: string[]) {
+    const workspaceId = await createWorkspace("guest", "test");
+    const proposal = await proposeFacts(workspaceId, "user-a", {
+      source: { kind: "message", content: texts.join("\n") },
+      facts: texts,
+    });
+    await confirmProposal(workspaceId, proposal.id, "user-a");
+    return {
+      workspaceId,
+      ids: new Map(proposal.items.map((i) => [i.content!, i.factId!])),
+    };
+  }
+  const message = (...contents: string[]) => ({
+    source: { kind: "message" as const, content: "x" },
+    chunks: [],
+    facts: contents.map((content) => ({ content })),
+  });
+  // Every new fact the model is shown replaces the listed fact numbered
+  // `target(text)`.
+  const supersedingAll =
+    (target: (text: string) => number) => (text: string) => ({
+      facts: [...text.matchAll(/^\((\d+)\) /gm)].map(([, n]) => ({
+        fact: Number(n),
+        kind: "supersede",
+        target: target(text),
+        reason: "改了",
+      })),
+    });
+  const numberOf = (text: string, content: string) =>
+    Number(new RegExp(`^\\[(\\d+)\\] ${content}$`, "m").exec(text)?.[1]);
+
+  it("replaces one current fact at most once however many facts and calls there are", async () => {
+    const models = installStubModels();
+    models.vectors.set("公式 X = a", [1, 0, 0]);
+    const contents = Array.from({ length: 35 }, (_, i) => `公式 X = b${i}`);
+    contents.forEach((c) => models.vectors.set(c, [1, 0.01, 0]));
+    const { workspaceId } = await withConfirmed("公式 X = a");
+    models.chat.structured = supersedingAll((t) => numberOf(t, "公式 X = a"));
+
+    const out = await compare({ workspaceId, inputs: [message(...contents)] });
+
+    expect(out.inputs[0].facts.filter((f) => f.replaces)).toHaveLength(1);
+    expect(out.inputs[0].facts[0].replaces).toBeDefined();
+    // More than one call to the model, made at once.
+    expect(models.chat.structuredPrompts.length).toBeGreaterThan(1);
+  });
+
+  it("takes a 取代 only of a fact found alike to that new fact, never another listed one", async () => {
+    const models = installStubModels();
+    models.vectors.set("公式 X = a", [1, 0, 0]);
+    models.vectors.set("週會在週三", [0, 1, 0]);
+    models.vectors.set("公式 X = b", [1, 0.05, 0]);
+    models.vectors.set("週會改到週四", [0.05, 1, 0]);
+    const { workspaceId } = await withConfirmed("公式 X = a", "週會在週三");
+    // Told (by injected text, say) to replace the meeting with the formula.
+    models.chat.structured = supersedingAll((t) => numberOf(t, "週會在週三"));
+
+    const out = await compare({
+      workspaceId,
+      inputs: [message("公式 X = b", "週會改到週四")],
+    });
+
+    expect(out.inputs[0].facts.map((f) => f.replaces?.target.content)).toEqual([
+      undefined,
+      "週會在週三",
+    ]);
+  });
+
+  it("asks no model about facts nothing current is alike to", async () => {
+    const models = installStubModels();
+    models.vectors.set("公式 X = a", [1, 0, 0]);
+    models.vectors.set("週會改到週四", [0, 1, 0]);
+    const { workspaceId } = await withConfirmed("公式 X = a");
+
+    const out = await compare({
+      workspaceId,
+      inputs: [message("週會改到週四")],
+    });
+
+    expect(out.inputs[0].facts[0].replaces).toBeUndefined();
+    expect(models.chat.structuredPrompts).toEqual([]);
+  });
+
+  it("embeds each new fact once, for comparing and for the proposal", async () => {
+    const models = installStubModels();
+    const { workspaceId } = await withConfirmed("公式 X = a");
+    const inputs = (
+      await compare({ workspaceId, inputs: [message("公式 X = b", "別的事")] })
+    ).inputs;
+
+    await propose({ workspaceId, userId: "user-a", inputs });
+
+    const embedded = Object.values(models.embedded).flat();
+    expect(embedded.filter((t) => t === "公式 X = b")).toHaveLength(1);
+    expect(embedded.filter((t) => t === "別的事")).toHaveLength(1);
+  });
+
+  it("proposes a 取代 whose target was replaced meanwhile as 新增, keeping the rest", async () => {
+    installStubModels();
+    const { workspaceId, ids } = await withConfirmed("公式 X = a");
+    const inputs = (
+      await compare({ workspaceId, inputs: [message("公式 X = b", "別的事")] })
+    ).inputs;
+    expect(inputs[0].facts[0].replaces).toBeDefined();
+    const meanwhile = await proposeFacts(workspaceId, "user-b", {
+      source: { kind: "message", content: "更正" },
+      facts: [],
+      corrections: [
+        {
+          kind: "obsolete",
+          targetFactId: ids.get("公式 X = a")!,
+          reason: "停用",
+          effectiveAt: new Date().toISOString(),
+        },
+      ],
+    });
+    await confirmProposal(workspaceId, meanwhile.id, "user-b");
+
+    const out = await propose({ workspaceId, userId: "user-a", inputs });
+
+    expect(out.proposals[0].items.map((i) => [i.kind, i.content])).toEqual([
+      ["add", "公式 X = b"],
+      ["add", "別的事"],
+    ]);
   });
 });
 
