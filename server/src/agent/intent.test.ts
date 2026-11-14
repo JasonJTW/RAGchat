@@ -33,13 +33,38 @@ describe("classifyIntent on a correction", () => {
     "這個做法已經停用",
     "更正：L 是使用年限比",
   ])("takes %j as a correction", (message) => {
-    expect(classifyIntent({ message })).toEqual({ intents: ["correct"] });
+    expect(classifyIntent({ message })).toEqual({
+      intents: ["correct"],
+      correction: message,
+    });
   });
 
   it("takes an input instruction as input, even if it reads like a correction", () => {
     expect(classifyIntent({ message: "記下：週會改成週四" })).toEqual({
       intents: ["input"],
     });
+  });
+});
+
+describe("classifyIntent on a message that corrects and asks", () => {
+  it.each([
+    ["R 已經改成回收率了，那現在 A 怎麼算？", "R 已經改成回收率了"],
+    ["R 不是取代率，是回收率。A 要怎麼算？", "R 不是取代率，是回收率"],
+    ["R 不是取代率,而是回收率,那 A 呢?", "R 不是取代率,而是回收率"],
+    ["舊的報名表單不再使用！新的在哪裡？", "舊的報名表單不再使用"],
+  ])("takes %j as both, the correction being %j", (message, correction) => {
+    expect(classifyIntent({ message })).toEqual({
+      intents: ["correct", "ask"],
+      correction,
+    });
+  });
+
+  it.each([
+    "R 改成什麼了？",
+    "R 是不是改成回收率了？",
+    "你知道 R 改成什麼了嗎，A 怎麼算？",
+  ])("takes %j, which only asks about a change, as a question", (message) => {
+    expect(classifyIntent({ message })).toEqual({ intents: ["ask"] });
   });
 });
 

@@ -26,11 +26,11 @@ const CANDIDATES = 6;
  * answer; then the facts most like the message.
  */
 export async function locateTargets(
-  state: Pick<State, "workspaceId" | "message" | "cited">,
+  state: Pick<State, "workspaceId" | "correction" | "cited">,
 ): Promise<Pick<State, "candidates">> {
   const [cited, matched] = await Promise.all([
     currentFacts(state.workspaceId, state.cited.slice(0, CANDIDATES)),
-    searchFacts(state.workspaceId, state.message, CANDIDATES),
+    searchFacts(state.workspaceId, state.correction, CANDIDATES),
   ]);
   const seen = new Set(cited.map((fact) => fact.id));
   const candidates = [
@@ -90,7 +90,8 @@ const TEAM_DATE = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Taipei" });
  * doesn't fit is dropped.
  */
 export async function draftCorrection(
-  state: Pick<State, "message" | "candidates"> & Partial<Pick<State, "role">>,
+  state: Pick<State, "correction" | "candidates"> &
+    Partial<Pick<State, "role">>,
   config: NodeConfig = {},
 ): Promise<Pick<State, "drafts">> {
   if (!state.candidates.length) return { drafts: [] };
@@ -106,7 +107,7 @@ export async function draftCorrection(
               .map((fact, i) => `[${i + 1}] ${fact.content}`)
               .join(
                 "\n",
-              )}\n\n今天：${TEAM_DATE.format(now)}\n\n成員的更正：${state.message}`,
+              )}\n\n今天：${TEAM_DATE.format(now)}\n\n成員的更正：${state.correction}`,
           ),
         ],
         { signal: config.signal },
@@ -121,7 +122,7 @@ export async function draftCorrection(
     if (correction.kind === "supersede" && !content) continue;
     const common = {
       target,
-      reason: correction.reason.trim() || state.message.trim(),
+      reason: correction.reason.trim() || state.correction.trim(),
       effectiveAt: effectiveAt(correction.effectiveDate, target, now),
     };
     drafts.push(
