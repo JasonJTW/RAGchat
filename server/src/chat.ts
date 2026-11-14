@@ -1,111 +1,142 @@
+import { randomUUID } from "node:crypto";
 import type { Response } from "express";
+// The AI SDK only speaks the UI message stream useChat reads; the agent's
+// nodes write its chunks (agent/state.ts).
 import {
   createUIMessageStream,
-  generateText,
   pipeUIMessageStreamToResponse,
-  streamText,
+  type UIMessage,
   type UIMessageChunk,
 } from "ai";
-import { noul } from "@typesafe-ai/sdk";
-import { retrieve, type Passage } from "./documents.js";
-import { CHAT_MODEL, CHAT_PROVIDER_OPTIONS, SYSTEM_ONE } from "./models.js";
+import { agent } from "./agent/graph.js";
+import type { Upload } from "./agent/input.js";
+import type { Turn } from "./agent/state.js";
+import { saveConversation } from "./conversations.js";
+import {
+  DeidentificationUnavailable,
+  pseudonymize,
+  pseudonymizeKnown,
+  type Reidentifier,
+  reidentifier,
+  UNAVAILABLE_REPLY,
+} from "./pseudonyms.js";
+import { containsSecret, SECRET_REFUSAL } from "./secrets.js";
+import type { Caller } from "./workspaces.js";
 
-/** A passage an answer cites, as shown under the answer. */
-export interface Citation extends Passage {
-  /** The `[n]` the answer marks it with. */
-  marker: number;
-}
-
-const PASSAGES_PER_ANSWER = 6;
-
-/** The fake support address the refusal points to (see the spec's Stubs). */
-const SUPPORT_EMAIL = "support@megaweaving.example";
-
-const REFUSAL_PHRASE = "這個問題我無法回答";
-const REFUSAL = `${REFUSAL_PHRASE}，請來信客服 ${SUPPORT_EMAIL}。`;
-
-// Below this cosine similarity between the question and its best-matching
-// chunk, no document covers the question: refuse without calling the model.
-// Calibrated on the answer key with openai/text-embedding-3-small: answerable
-// questions score 0.38–0.85, Q12 0.22 (0.27 with the PDF and txt uploaded;
-// see the spec's 拒答規則).
-const MIN_SIMILARITY = 0.3;
-
-const SYSTEM_PROMPT = `你是「大量交織 megaweaving」的客服助理。
-- 一律用繁體中文回答，即使使用者用其他語言提問。
-- 只根據使用者訊息裡提供的段落作答，不要用段落以外的知識。
-- 先直接回答問題，再用一兩句補上段落裡跟答案同一處的關鍵細節：條件、材料、人數、年份、原因或出處（例如「不是原創」就說出它源自哪裡）。
-- 問題問要做哪些事、確認什麼、有哪幾類時，段落裡相關的每一項都要列出，不要只挑其中幾項。
-- 每個事實後面用段落編號標出處，例如 [1]、[2]；只標你實際用到的段落，不要另寫「出處：」。
-- 只有當段落對同一件事給出不同說法時（例如人數不同）：先給最新且有日期的說法，再列出其他說法的具體數字與各自的年份、來源，並說明這些說法未經確認。說法一致時不要提矛盾。
-- 例外：段落完全沒有提到問題要問的事時，不要作答，整個回覆只寫這一句（不加段落編號）：${REFUSAL}
-  段落有答案時，照上面的規則完整回答，不要寫這一句。`;
+export type { Citation } from "./agent/ask.js";
 
 /** The parts of an AI SDK UIMessage the chat reads. */
 export interface ChatMessage {
   role: string;
-  parts: { type: string; text?: string }[];
+  parts: {
+    type: string;
+    text?: string;
+    data?: unknown;
+    filename?: string;
+    url?: string;
+  }[];
 }
 
-const REWRITE_PROMPT = `把使用者的最新問題改寫成一句不需要上文也看得懂的獨立問題：把代名詞與省略的主詞換成對話裡指的那件事。
-- 只輸出改寫後的問題，不要回答、不要解釋。
-- 一律用繁體中文。
-- 最新問題本身已經完整時，原樣輸出。`;
-
-// Asked of Jev about a first question. Validated in ticket 11 on the answer
-// key's first questions; the examples must stay clear of answer-key questions.
-const FIRST_QUESTION_CONTEXT =
-  "大量交織 megaweaving 客服聊天機器人收到的第一則訊息，之前沒有任何對話。機器人回答關於大量交織（理念、FB 社團、megaweaving.net 平台、交換規則、發起人蕭有志、各項計畫）的問題。";
-const UNNAMED_SUBJECT = noul(
-  "這個問題問的是某個特定對象（計畫、活動、案例、物品等），但沒說出它的名稱，只用代名詞（它、那、這、其）指它，或直接省略主詞，所以不知道上文就無法知道在問什麼。",
-  {
-    true: "問題指向一個沒說出名稱的特定對象，例如「它的報名截止日是哪天？」「一共有幾個人參加？」",
-    false:
-      "問題說出了要問的對象名稱，或問的是大量交織、megaweaving.net 平台、社團、交換規則本身的一般使用問題（例如「怎麼刪除自己的貼文？」「社團可以賣東西嗎？」），即使用了「這個」「那個」，後面也接著名稱",
-  },
-);
-// From ticket 11: first questions that name their subject scored at most
-// 0.28, ones that don't at least 0.69 (one miss at 0.41).
-const ASK_WHICH_SUBJECT_AT = 0.5;
-// Jev answers in ~0.2 s warm, ~0.4 s cold; past this the chat answers as usual.
-const JEV_DEADLINE_MS = 1_500;
-
-const CLARIFY = "請問你指的是哪個計畫或主題？";
+const DATA_URL = /^data:[^,]*;base64,([A-Za-z0-9+/=\s]*)$/;
 
 /**
- * Answers the latest user message from the stored documents, streamed. A
- * follow-up is first rewritten into a standalone question for retrieval; the
- * answer still sees the whole conversation. Every first question is checked
- * by Jev for naming its subject, alongside retrieval; when it doesn't, the
- * reply asks which subject is meant instead of answering.
+ * The files the latest user message attaches (AI SDK `file` parts, data
+ * URLs), or "invalid" when one is not a base64 data URL. Earlier messages'
+ * files were read when they were sent and are ignored.
  */
-export function streamAnswer(res: Response, messages: ChatMessage[]) {
+export function attachedFiles(messages: ChatMessage[]): Upload[] | "invalid" {
+  const latest = messages.at(-1);
+  if (latest?.role !== "user") return [];
+  const files: Upload[] = [];
+  for (const part of latest.parts) {
+    if (part.type !== "file") continue;
+    const data = DATA_URL.exec(part.url ?? "");
+    if (!data) return "invalid";
+    files.push({
+      filename: part.filename || "附件",
+      bytes: Buffer.from(data[1], "base64"),
+    });
+  }
+  return files;
+}
+
+/**
+ * Runs the agent on the latest user message and its attached files, and
+ * streams its reply: an answer with citations, or proposal cards for input or
+ * a correction. With a conversation id, the messages and the reply are saved
+ * as the caller's conversation before the response ends (also when the
+ * client leaves mid-reply), attached files reduced to their names (see
+ * conversations.ts); the caller must be allowed to continue it.
+ *
+ * This is where de-identification (ADR-0004) wraps the agent: the agent
+ * gets the conversation with its sensitive values pseudonymised, its reply
+ * gets the real values back as it streams, and the conversation is saved
+ * pseudonymised. A latest message holding a secret is refused before any of
+ * that; an earlier one (still in the client's history) is blanked.
+ */
+export async function streamReply(
+  res: Response,
+  caller: Caller,
+  sent: ChatMessage[],
+  files: Upload[],
+  conversationId?: string,
+) {
+  const { messages, refused } = await withoutSecrets(sent);
   const turns = textTurns(messages);
-  const question = turns.at(-1)?.role === "user" ? turns.pop()!.content : "";
+  const message = turns.at(-1)?.role === "user" ? turns.pop()!.content : "";
+  const attachments = files.length;
+  const cited = citedFacts(messages);
+  const { workspaceId } = caller;
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
       const abort = new AbortController();
-      // A client that leaves stops the answer too (after a full answer, a no-op).
+      // A client that leaves stops the reply too (after a full reply, a no-op).
       res.once("close", () => abort.abort());
-      // Retrieval runs while Jev checks the question; the answer model is
-      // called only once both are done and Jev found a name.
-      const found = findPassages(turns, question);
-      // When the reply asks for the subject, the passages go unread.
-      found.catch(() => {});
-      const clarify = !turns.length && (await leavesSubjectUnnamed(question));
       writer.write({ type: "start" });
-      writer.write({ type: "text-start", id: "answer" });
-      if (clarify) {
-        writer.write({ type: "text-delta", id: "answer", delta: CLARIFY });
-        writer.write({ type: "text-end", id: "answer" });
-      } else {
-        for await (const part of answerParts(
-          turns,
-          question,
-          await found,
-          abort.signal,
+      const reply = (text: string) => {
+        writer.write({ type: "text-start", id: "reply" });
+        writer.write({ type: "text-delta", id: "reply", delta: text });
+        writer.write({ type: "text-end", id: "reply" });
+        writer.write({ type: "finish" });
+      };
+      if (refused) return reply(SECRET_REFUSAL);
+      let safe: string[];
+      let reid: Reidentifier;
+      try {
+        // The files' names too: a file refused before [去識別] (format,
+        // size) keeps its name in the reply and the saved conversation,
+        // which are pseudonymised only for values already known.
+        [safe, reid] = await Promise.all([
+          pseudonymize(workspaceId, [
+            ...files.map((file) => file.filename),
+            ...turns.map((t) => t.content),
+            message,
+          ]).then((all) => all.slice(files.length)),
+          reidentifier(workspaceId),
+        ]);
+      } catch (error) {
+        if (!(error instanceof DeidentificationUnavailable)) throw error;
+        console.error(error);
+        return reply(UNAVAILABLE_REPLY);
+      }
+      try {
+        for await (const chunk of await agent.stream(
+          {
+            ...caller,
+            turns: turns.map((t, i) => ({ ...t, content: safe[i] })),
+            message: safe.at(-1)!,
+            attachments,
+            files,
+            cited,
+          },
+          { streamMode: "custom", signal: abort.signal },
         ))
-          writer.write(part);
+          for (const out of await reidentified(chunk as UIMessageChunk, reid))
+            writer.write(out);
+      } catch (error) {
+        // The client left mid-reply: nobody reads the rest, and it's no failure.
+        if (abort.signal.aborted) return;
+        throw error;
       }
       writer.write({ type: "finish" });
     },
@@ -113,6 +144,23 @@ export function streamAnswer(res: Response, messages: ChatMessage[]) {
       console.error("chat failed:", error);
       return "回答時發生錯誤，請稍後再試。";
     },
+    ...(conversationId && {
+      originalMessages: messages as UIMessage[],
+      generateId: randomUUID,
+      onEnd: async ({ messages: all }) => {
+        try {
+          await saveConversation(
+            caller,
+            conversationId,
+            await pseudonymizeKnown(workspaceId, all),
+          );
+        } catch (error) {
+          // Never saved in the clear.
+          if (!(error instanceof DeidentificationUnavailable)) throw error;
+          console.error("conversation not saved:", error);
+        }
+      },
+    }),
   });
   return pipeUIMessageStreamToResponse({
     response: res,
@@ -123,76 +171,71 @@ export function streamAnswer(res: Response, messages: ChatMessage[]) {
   });
 }
 
-// The passages for the question; a follow-up is first made standalone.
-async function findPassages(turns: Turn[], question: string) {
-  const query = turns.length
-    ? await standaloneQuestion(turns, question)
-    : question;
-  return retrieve(query, PASSAGES_PER_ANSWER);
+/** What a user message holding a secret is shown as once refused. */
+export const SECRET_REMOVED = "（已移除：這則訊息含有密碼或 API key）";
+
+// The messages with each user message that holds a secret blanked, and
+// whether the latest one did.
+async function withoutSecrets(
+  messages: ChatMessage[],
+): Promise<{ messages: ChatMessage[]; refused: boolean }> {
+  const secret = await Promise.all(
+    messages.map((m) =>
+      m.role === "user"
+        ? containsSecret(
+            m.parts
+              .map((p) => (p.type === "text" ? (p.text ?? "") : ""))
+              .join("\n"),
+          )
+        : Promise.resolve(false),
+    ),
+  );
+  return {
+    messages: messages.map((m, i) =>
+      secret[i]
+        ? {
+            ...m,
+            parts: m.parts.map((p) =>
+              p.type === "text" ? { ...p, text: SECRET_REMOVED } : p,
+            ),
+          }
+        : m,
+    ),
+    refused: secret.at(-1) ?? false,
+  };
 }
 
-// The answer's text deltas, its text end, then its citations.
-async function* answerParts(
-  turns: Turn[],
-  question: string,
-  { passages, similarity }: Awaited<ReturnType<typeof findPassages>>,
-  abortSignal: AbortSignal,
-): AsyncGenerator<UIMessageChunk> {
-  if (abortSignal.aborted) return;
-  if (similarity < MIN_SIMILARITY) {
-    yield { type: "text-delta", id: "answer", delta: REFUSAL };
-    yield { type: "text-end", id: "answer" };
-    return;
+// A chunk of the agent's reply with the real values back. A text part's
+// deltas may hold a pseudonym back until it is whole; its end lets it out.
+async function reidentified(
+  chunk: UIMessageChunk,
+  reid: Reidentifier,
+): Promise<UIMessageChunk[]> {
+  if (chunk.type === "text-delta" || chunk.type === "reasoning-delta") {
+    const delta = await reid.text(chunk.id, chunk.delta);
+    return delta ? [{ ...chunk, delta }] : [];
   }
-  const result = streamText({
-    model: CHAT_MODEL,
-    system: SYSTEM_PROMPT,
-    providerOptions: CHAT_PROVIDER_OPTIONS,
-    abortSignal,
-    messages: [
-      ...turns,
-      {
-        role: "user",
-        content: `段落：\n\n${passages
-          .map((p, i) => `[${i + 1}] ${p.label}\n${p.text}`)
-          .join("\n\n")}\n\n問題：${question}`,
-      },
-    ],
+  if (chunk.type === "text-end" || chunk.type === "reasoning-end") {
+    const rest = await reid.end(chunk.id);
+    const type = chunk.type === "text-end" ? "text-delta" : "reasoning-delta";
+    return rest ? [{ type, id: chunk.id, delta: rest }, chunk] : [chunk];
+  }
+  return [await reid.value(chunk)];
+}
+
+// The ids of the facts the latest answer cited, as its citation parts came
+// back from the client: unchecked, so the agent keeps only current facts of
+// the caller's workspace.
+function citedFacts(messages: ChatMessage[]): string[] {
+  const answer = [...messages].reverse().find((m) => m.role === "assistant");
+  return (answer?.parts ?? []).flatMap((part) => {
+    const data = part.data as { kind?: unknown; id?: unknown } | undefined;
+    return part.type === "data-citation" &&
+      data?.kind === "fact" &&
+      typeof data.id === "string"
+      ? [data.id]
+      : [];
   });
-  let answer = "";
-  for await (const delta of result.textStream) {
-    answer += delta;
-    yield { type: "text-delta", id: "answer", delta };
-  }
-  yield { type: "text-end", id: "answer" };
-  // A refusal cites nothing, even if the model marked a passage.
-  if (!answer.includes(REFUSAL_PHRASE))
-    for (const citation of cited(answer, passages))
-      yield { type: "data-citation", id: citation.id, data: citation };
-}
-
-// Whether Jev finds the question points at something it never names. No
-// JEV_API_KEY, a failure or no answer within the deadline counts as named.
-async function leavesSubjectUnnamed(question: string): Promise<boolean> {
-  if (!SYSTEM_ONE) return false;
-  try {
-    const { answers } = await SYSTEM_ONE.systemOne(
-      {
-        state: { context: FIRST_QUESTION_CONTEXT, question },
-        questions: { unnamedSubject: UNNAMED_SUBJECT },
-      },
-      { signal: AbortSignal.timeout(JEV_DEADLINE_MS) },
-    );
-    return answers.unnamedSubject.noul >= ASK_WHICH_SUBJECT_AT;
-  } catch (error) {
-    console.warn("subject check failed, answering as usual:", error);
-    return false;
-  }
-}
-
-interface Turn {
-  role: "user" | "assistant";
-  content: string;
 }
 
 // The conversation as plain-text turns; citations and other parts dropped.
@@ -209,34 +252,4 @@ function textTurns(messages: ChatMessage[]): Turn[] {
         ]
       : [],
   );
-}
-
-async function standaloneQuestion(
-  turns: Turn[],
-  question: string,
-): Promise<string> {
-  const { text } = await generateText({
-    model: CHAT_MODEL,
-    system: REWRITE_PROMPT,
-    providerOptions: CHAT_PROVIDER_OPTIONS,
-    prompt: `對話：\n${turns
-      .map((t) => `${t.role === "user" ? "使用者" : "助理"}：${t.content}`)
-      .join("\n")}\n\n最新問題：${question}`,
-  });
-  return text.trim() || question;
-}
-
-// The passages the answer marks with [n], in marker order. Marks may be
-// combined, e.g. [1, 3] or [1][3], and the model sometimes writes them in
-// full-width brackets: 〔1〕, ［1］, 【1】.
-function cited(answer: string, passages: Passage[]): Citation[] {
-  const markers = new Set<number>();
-  for (const [, list] of answer.matchAll(
-    /[[〔［【](\d+(?:\s*[,，、]\s*\d+)*)[\]〕］】]/g,
-  ))
-    for (const n of list.split(/[,，、]/)) markers.add(Number(n.trim()));
-  return [...markers]
-    .filter((n) => n >= 1 && n <= passages.length)
-    .sort((a, b) => a - b)
-    .map((n) => ({ ...passages[n - 1], marker: n }));
 }

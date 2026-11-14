@@ -1,9 +1,13 @@
+import { Embeddings } from "@langchain/core/embeddings";
+import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import {
-  MockEmbeddingModelV4,
-  MockLanguageModelV4,
-  MockProviderV4,
-} from "ai/test";
-import { simulateReadableStream } from "ai";
+  AIMessage,
+  AIMessageChunk,
+  type BaseMessage,
+} from "@langchain/core/messages";
+import { ChatGenerationChunk, type ChatResult } from "@langchain/core/outputs";
+import { RunnableLambda } from "@langchain/core/runnables";
+import { EMBEDDING_DIMENSIONS } from "./db/schema.js";
 import type { SystemOne } from "./models.js";
 
 /** The fake chat model's next reply and the prompts it was sent. */
@@ -16,6 +20,19 @@ export interface StubChat {
   rewrite: string;
   /** Each rewrite prompt, flattened like `prompts`. */
   rewritePrompts: string[];
+  /**
+   * Answers `withStructuredOutput(schema, { name }).invoke(messages)` from
+   * the last message's text. By default, for the name "correction" it
+   * corrects as `stubCorrections` does; for "entities" it names entities as
+   * `stubEntities` does; for "entity-link" it makes every mention a new
+   * entity; for "comparison" it compares as `stubComparison` does; otherwise it extracts facts: each sentence (split at 。 and
+   * line breaks) is one fact.
+   */
+  structured: (text: string, name?: string) => unknown;
+  /** Each structured-output prompt, flattened like `prompts`. */
+  structuredPrompts: string[];
+  /** The model id of each call (stream, invoke or structured), in order. */
+  models: string[];
 }
 
 /** The fake Jev's answer to every Noul and the state of each request. */
@@ -36,9 +53,10 @@ export const STUB_CHAT_REPLY = "這是假模型的回答，依據第 1 段。[1]
 export const STUB_CHAT_REWRITE = "旅梯計畫總共巡迴了幾站？是哪幾年？";
 
 /**
- * Replaces the AI Gateway and Jev with fakes, without a network call: any
+ * Replaces the models (models.ts) and Jev with fakes, without a network call: any
  * embedding model id returns fixed vectors derived from the text and the id,
- * any chat model id streams `chat.reply` and returns `chat.rewrite` whole, and
+ * any chat model id streams `chat.reply` and, when invoked, returns
+ * `chat.rewrite` whole, and
  * Jev answers every Noul with `jev.noul`. Returns the texts each embedding
  * model id was asked to embed, the chat and Jev stubs, and `vectors`: fixed
  * embeddings for given texts, overriding the derived ones.
@@ -55,64 +73,24 @@ export function installStubModels(): {
     prompts: [],
     rewrite: STUB_CHAT_REWRITE,
     rewritePrompts: [],
+    structured: (text, name) =>
+      name === "correction"
+        ? stubCorrections(text)
+        : name === "entities"
+          ? stubEntities(text)
+          : name === "entity-link"
+            ? { links: [] }
+            : name === "comparison"
+              ? stubComparison(text)
+              : sentencesAsFacts(text),
+    structuredPrompts: [],
+    models: [],
   };
   const vectors = new Map<string, number[]>();
-  const provider = new MockProviderV4();
-  provider.embeddingModel = (modelId: string) =>
-    new MockEmbeddingModelV4({
-      modelId,
-      maxEmbeddingsPerCall: 2048,
-      doEmbed: ({ values }) => {
-        (embedded[modelId] ??= []).push(...values);
-        return Promise.resolve({
-          embeddings: values.map(
-            (text) => vectors.get(text) ?? stubVector(modelId, text),
-          ),
-          warnings: [],
-        });
-      },
-    });
-  provider.languageModel = (modelId: string) =>
-    new MockLanguageModelV4({
-      modelId,
-      doGenerate: ({ prompt }) => {
-        chat.rewritePrompts.push(flatten(prompt));
-        return Promise.resolve({
-          content: [
-            {
-              type: "text" as const,
-              text: chat.rewrite,
-            },
-          ],
-          finishReason: { unified: "stop" as const, raw: undefined },
-          usage: NO_USAGE,
-          warnings: [],
-        });
-      },
-      doStream: ({ prompt }) => {
-        chat.prompts.push(flatten(prompt));
-        return Promise.resolve({
-          stream: simulateReadableStream({
-            chunkDelayInMs: 10,
-            chunks: [
-              { type: "text-start" as const, id: "1" },
-              ...Array.from(chat.reply, (delta) => ({
-                type: "text-delta" as const,
-                id: "1",
-                delta,
-              })),
-              { type: "text-end" as const, id: "1" },
-              {
-                type: "finish" as const,
-                finishReason: { unified: "stop" as const, raw: undefined },
-                usage: NO_USAGE,
-              },
-            ],
-          }),
-        });
-      },
-    });
-  globalThis.AI_SDK_DEFAULT_PROVIDER = provider;
+  globalThis.MODEL_STUBS = {
+    chat: (modelId) => new StubChatModel(modelId, chat),
+    embeddings: (modelId) => new StubEmbeddings(modelId, embedded, vectors),
+  };
   const jev: StubJev = { noul: 0, states: [] };
   const fakeJev = {
     systemOne(
@@ -146,24 +124,220 @@ export function installStubModels(): {
   return { embedded, chat, jev, vectors };
 }
 
-const NO_USAGE = {
-  inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
-  outputTokens: { total: 0, text: 0, reasoning: 0 },
-};
+// A chat model that streams `chat.reply` one character every 10 ms, and
+// answers an invoke with `chat.rewrite`.
+class StubChatModel extends BaseChatModel {
+  constructor(
+    readonly model: string,
+    private readonly chat: StubChat,
+  ) {
+    super({});
+  }
+
+  _llmType() {
+    return "stub";
+  }
+
+  // The real models answer in a given shape by tool calling; this one asks
+  // `chat.structured`.
+  override withStructuredOutput(_schema: unknown, options?: { name?: string }) {
+    return RunnableLambda.from((messages: BaseMessage[]) => {
+      this.chat.models.push(this.model);
+      this.chat.structuredPrompts.push(flatten(messages));
+      return this.chat.structured(messages.at(-1)?.text ?? "", options?.name);
+    }) as unknown as ReturnType<BaseChatModel["withStructuredOutput"]>;
+  }
+
+  _generate(messages: BaseMessage[]): Promise<ChatResult> {
+    this.chat.models.push(this.model);
+    this.chat.rewritePrompts.push(flatten(messages));
+    const text = this.chat.rewrite;
+    return Promise.resolve({
+      generations: [{ text, message: new AIMessage(text) }],
+    });
+  }
+
+  async *_streamResponseChunks(
+    messages: BaseMessage[],
+  ): AsyncGenerator<ChatGenerationChunk> {
+    this.chat.models.push(this.model);
+    this.chat.prompts.push(flatten(messages));
+    for (const delta of this.chat.reply) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      yield new ChatGenerationChunk({
+        text: delta,
+        message: new AIMessageChunk(delta),
+      });
+    }
+  }
+}
+
+// Embeddings derived from the text and the model id, or taken from `vectors`.
+class StubEmbeddings extends Embeddings {
+  constructor(
+    readonly model: string,
+    private readonly embedded: Record<string, string[]>,
+    private readonly vectors: Map<string, number[]>,
+  ) {
+    super({});
+  }
+
+  embedDocuments(texts: string[]): Promise<number[][]> {
+    (this.embedded[this.model] ??= []).push(...texts);
+    // Zero-padded to the stored length; padding leaves cosines unchanged.
+    return Promise.resolve(
+      texts.map((text) =>
+        padded(this.vectors.get(text) ?? stubVector(this.model, text)),
+      ),
+    );
+  }
+
+  async embedQuery(text: string): Promise<number[]> {
+    const [vector] = await this.embedDocuments([text]);
+    return vector;
+  }
+}
 
 // The system prompt, then each message, as text.
-function flatten(
-  prompt: { content: string | { type: string; text?: string }[] }[],
-): string {
-  return prompt
-    .map((message) =>
-      typeof message.content === "string"
-        ? message.content
-        : message.content
-            .map((part) => (part.type === "text" ? (part.text ?? "") : ""))
-            .join(""),
-    )
-    .join("\n\n");
+function flatten(messages: BaseMessage[]): string {
+  return messages.map((message) => message.text).join("\n\n");
+}
+
+function padded(vector: number[]): number[] {
+  return vector.length >= EMBEDDING_DIMENSIONS
+    ? vector
+    : [
+        ...vector,
+        ...new Array<number>(EMBEDDING_DIMENSIONS - vector.length).fill(0),
+      ];
+}
+
+// The default structured answer: every sentence of the text is a fact,
+// holding from the date it starts with 「YYYY-MM-DD 起」, if any.
+function sentencesAsFacts(text: string) {
+  return {
+    facts: text
+      .split(/[。\n]+/)
+      .map((sentence) => sentence.trim())
+      .filter(Boolean)
+      .map((content) => ({
+        content,
+        validFrom: /^(\d{4}-\d{2}-\d{2})\s*起/.exec(content)?.[1] ?? null,
+      })),
+  };
+}
+
+/**
+ * The default entities, read from [連結實體]'s numbered facts: each 「name」
+ * in a fact is an entity of kind "other", and a fact naming two or more
+ * relates the first to the second by the words between them (e.g.
+ * 「王小明」負責「回收模組」: 王小明 負責 回收模組).
+ */
+function stubEntities(text: string) {
+  return {
+    facts: [...text.matchAll(/^\[(\d+)\] (.*)$/gm)].map(([, n, content]) => {
+      const names = [...content.matchAll(/「([^」]+)」/g)];
+      const between =
+        names.length > 1
+          ? content
+              .slice(names[0].index + names[0][0].length, names[1].index)
+              .trim()
+          : "";
+      return {
+        fact: Number(n),
+        entities: names.map(([, name]) => ({ name, kind: "other" })),
+        relations: between
+          ? [{ from: names[0][1], relation: between, to: names[1][1] }]
+          : [],
+      };
+    }),
+  };
+}
+
+/**
+ * The default correction, read from 起草修正's message (agent/correct.ts):
+ * 「X 不是 A，是 B」 replaces A with B in the first listed fact that mentions
+ * both X and A; a message saying a fact is 過時 or no longer used marks the
+ * first listed fact mentioning its subject 過時. Anything else corrects
+ * nothing.
+ */
+function stubCorrections(text: string) {
+  const facts = [...text.matchAll(/^\[(\d+)\] (.*)$/gm)].map(
+    ([, n, content]) => ({ n: Number(n), content }),
+  );
+  const message = /成員的更正：([\s\S]*)$/.exec(text)?.[1].trim() ?? "";
+  const replaced = /^(.+?)不是(.+?)[，,]\s*(?:而)?是(.+?)[。.]?$/.exec(message);
+  if (replaced) {
+    const [, subject, from, to] = replaced.map((part) => part.trim());
+    const fact = facts.find(
+      (f) => f.content.includes(subject) && f.content.includes(from),
+    );
+    return {
+      corrections: fact
+        ? [
+            {
+              fact: fact.n,
+              kind: "supersede",
+              content: fact.content.replaceAll(from, to),
+              reason: message,
+              effectiveDate: null,
+            },
+          ]
+        : [],
+    };
+  }
+  const obsolete = /^(.+?)(?:已經|已)?(?:過時|不再使用)/.exec(message);
+  const fact =
+    obsolete && facts.find((f) => f.content.includes(obsolete[1].trim()));
+  return {
+    corrections: fact
+      ? [
+          {
+            fact: fact.n,
+            kind: "obsolete",
+            content: null,
+            reason: message,
+            effectiveDate: null,
+          },
+        ]
+      : [],
+  };
+}
+
+/**
+ * The default comparison, read from 比對衝突's message (agent/input.ts): a
+ * new fact stating a formula 「X = …」 replaces the first listed current
+ * fact stating one for the same X with another right-hand side; every other
+ * new fact is 新增.
+ */
+function stubComparison(text: string) {
+  const formula = (content: string) => {
+    const match = /(?:^|[\s：:為])([A-Za-z])\s*=\s*([^，。；,;\n]+)/.exec(
+      content,
+    );
+    return match && { lhs: match[1], rhs: match[2].trim() };
+  };
+  const current = [...text.matchAll(/^\[(\d+)\] (.*)$/gm)].map(
+    ([, n, content]) => ({ n: Number(n), formula: formula(content) }),
+  );
+  return {
+    facts: [...text.matchAll(/^\((\d+)\) (.*)$/gm)].map(([, n, content]) => {
+      const mine = formula(content);
+      const target =
+        mine &&
+        current.find(
+          (c) => c.formula?.lhs === mine.lhs && c.formula.rhs !== mine.rhs,
+        );
+      return target
+        ? {
+            fact: Number(n),
+            kind: "supersede",
+            target: target.n,
+            reason: `${mine.lhs} 改為 ${mine.rhs}`,
+          }
+        : { fact: Number(n), kind: "add", target: null, reason: null };
+    }),
+  };
 }
 
 // Hashes character bigrams into 64 buckets, so texts sharing words point the

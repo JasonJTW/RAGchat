@@ -18,6 +18,7 @@
     "@ai-sdk/openai": "^4.0.105",
     "@ai-sdk/react": "^4.0.161",
     "@base-ui/react": "^1.9.0",
+    "@clerk/nextjs": "^7.9.26",
     "ai": "^7.0.157",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.5.1",

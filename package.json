@@ -9,6 +9,9 @@
     "dev": "concurrently -n web,server -c blue,green \"npm run dev -w web\" \"npm run dev -w server\"",
     "dev:web": "npm run dev -w web",
     "dev:server": "npm run dev -w server",
+    "db:up": "docker compose up -d --wait postgres",
+    "presidio:up": "docker compose up -d --wait presidio",
+    "db:migrate": "npm run db:migrate -w server",
     "build": "npm run build -w web && npm run build -w server",
     "lint": "npm run lint --workspaces",
     "test": "npm test --workspaces",
@@ -16,7 +19,7 @@
     "setup:repo": "bash scripts/setup-repo.sh",
     "setup:worktree": "bash scripts/setup-worktree.sh",
     "test:e2e": "npm run test:e2e -w web",
-    "test:live": "npm run test:live -w web",
+    "test:live": "npm run test:live -w server && npm run test:live -w web",
     "prepare": "lefthook install",
     "typecheck": "npm run typecheck --workspaces",
     "postinstall": "npm exec -w web -- playwright install chromium"

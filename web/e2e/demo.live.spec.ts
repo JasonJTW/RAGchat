@@ -1,13 +1,15 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { expect, test, type Page } from "@playwright/test";
-import { ADMIN_USERNAME, logIn, upload } from "./admin-login";
+import { expect, test } from "@playwright/test";
 import { ask, askFollowUp } from "./ask";
+import { inputAndConfirm, sendFiles } from "./sources";
 
-// The spec's Demo Script 1–8, run in order against one server that starts with
-// an empty document store, checking every answer-key entry against the real
-// model (.scratch/kb-chatbot/fixtures/answer-key.md). Tests run in file order
-// and share the server's state: step 3's uploads feed steps 5–8.
+// The kb-chatbot Demo Script 1–8, run in order against one server that starts
+// with an empty knowledge base, checking every answer-key entry against the
+// real model (.scratch/kb-chatbot/fixtures/answer-key.md). Tests run in file
+// order and share the server's state: step 3's files, attached in the chat
+// and confirmed, feed steps 5–8. A citation matches a location by its label
+// (a passage's) or by the passage its fact was drawn from (來源原文 · …).
 
 const EVIDENCE = path.join(__dirname, "../../.scratch/kb-chatbot/evidence/10");
 
@@ -140,11 +142,15 @@ const MARKDOWN = [
   "10-discrepancies-open-questions.md",
 ];
 
+// The two sources Q6 is answered from, deleted in step 8.
+const Q6_SOURCES = ["faq.txt", "07-megaweaving-net-platform.md"];
+// Step 3's conversation of each file, by name, for step 8.
+const conversationOf = new Map<string, string>();
+
 const OTHERS = ["04-founder-hsiao-yu-chih.pdf", "faq.txt", "pickup-notice.txt"];
 
-const REFUSAL = "這個問題我無法回答";
+const REFUSAL = "知識庫裡沒有這件事的資料";
 const CLARIFY = "請問你指的是哪個計畫或主題？";
-const SUPPORT = "support@megaweaving.example";
 
 // The answer key's normalisation: no thousands separators, dates as
 // YYYY-MM-DD, 五站 = 5 站; plus no whitespace and lowercase.
@@ -163,15 +169,6 @@ function normalize(text: string): string {
 
 function note(type: string, description: string) {
   test.info().annotations.push({ type, description });
-}
-
-/** One row per document: the rows that have a 刪除 button. */
-async function documentRows(page: Page) {
-  await expect(page.getByRole("table")).toHaveAttribute("aria-busy", "false");
-  return page
-    .getByRole("table")
-    .getByRole("row")
-    .filter({ has: page.getByRole("button", { name: "刪除" }) });
 }
 
 type Answer = Awaited<ReturnType<typeof ask>>;
@@ -196,37 +193,41 @@ async function expectMatches(entry: Entry, reply: Answer) {
       `answer contains ${ways.join("｜")}:\n${text}`,
     ).toBe(true);
   }
-  const labels = await answer
-    .getByRole("list", { name: "出處" })
-    .getByRole("listitem")
-    .locator("summary")
-    .allTextContents();
+  const labels = await citationTexts(answer);
   note(`${entry.id} citations`, labels.join("\n"));
   await answer.screenshot({ path: path.join(EVIDENCE, `${entry.id}.png`) });
   expect(
     labels.some((label) =>
-      entry.cites.some((location) =>
-        citesMatch(label.replace(/^\[\d+\] /, ""), location),
-      ),
+      entry.cites.some((location) => citesMatch(label, location)),
     ),
     `a citation points to ${entry.cites.join("｜")}:\n${labels.join("\n")}`,
   ).toBe(true);
   expectStreamed(entry.id, reply);
 }
 
-function citesMatch(label: string, location: string): boolean {
-  const [file, ...headings] = location.split(" › ");
-  return label.startsWith(file) && headings.every((h) => label.includes(h));
+/** Each citation's whole text: its label, text and 來源原文 label. */
+function citationTexts(answer: Answer["answer"]) {
+  return answer
+    .getByRole("list", { name: "出處" })
+    .getByRole("listitem")
+    .allTextContents();
 }
 
-/** `refuses`: the refusal and the support address, no citations. */
+function citesMatch(citation: string, location: string): boolean {
+  const [file, ...headings] = location.split(" › ");
+  return (
+    citation.includes(`${file}${headings.length ? " › " : ""}`) &&
+    headings.every((h) => citation.includes(h))
+  );
+}
+
+/** `refuses`: the refusal, no citations. */
 async function expectRefuses(id: string, reply: Answer) {
   const { answer, text } = reply;
   note(`${id} answer`, text);
   await answer.screenshot({ path: path.join(EVIDENCE, `${id}.png`) });
   expect(text).not.toBe(CLARIFY);
   expect(text).toContain(REFUSAL);
-  expect(text).toContain(SUPPORT);
   await expect(answer.getByRole("list", { name: "出處" })).toHaveCount(0);
   note(`${id} citations`, "none");
   // A refusal may arrive in one piece (the threshold skips the model), so
@@ -247,50 +248,32 @@ function answerKeyTest(id: string) {
 test.describe("demo script @live", () => {
   test.skip(!hasKey("AI_GATEWAY_API_KEY"), "AI_GATEWAY_API_KEY is not set");
 
-  test("1. /admin without logging in leads to the login screen", async ({
-    page,
-  }) => {
-    await page.goto("/admin");
-    await expect(page).toHaveURL(/\/admin\/login$/);
-    await expect(page.getByRole("button", { name: "登入" })).toBeVisible();
-    await page.screenshot({ path: path.join(EVIDENCE, "step1.png") });
+  test.describe("signed out", () => {
+    test.use({ storageState: { cookies: [], origins: [] } });
+    test("1. the chat without signing in leads to sign-in", async ({
+      page,
+    }) => {
+      await page.goto("/");
+      await expect(page).toHaveURL(/\/sign-in/);
+      await page.screenshot({ path: path.join(EVIDENCE, "step1.png") });
+    });
   });
 
-  test("2. a wrong password is refused; the right one opens an empty list", async ({
-    page,
-  }) => {
-    await page.goto("/admin/login");
-    await page.getByRole("textbox", { name: "帳號" }).fill(ADMIN_USERNAME);
-    await page.getByLabel("密碼").fill("wrong-password");
-    await page.getByRole("button", { name: "登入" }).click();
-    await expect(page.getByRole("main").getByRole("alert")).toHaveText(
-      "帳號或密碼錯誤",
-    );
-    await page.screenshot({ path: path.join(EVIDENCE, "step2-wrong.png") });
-
-    await logIn(page);
-    await expect(await documentRows(page)).toHaveCount(0);
+  test("2. a signed-in 成員 opens the chat", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByRole("button", { name: "附加檔案" })).toBeVisible();
     await page.screenshot({ path: path.join(EVIDENCE, "step2-empty.png") });
   });
 
-  test("3. U1: two batches list 13 documents, each with chunks", async ({
+  test("3. U1: the 13 files, attached in the chat, are confirmed into the knowledge base", async ({
     page,
   }) => {
-    test.setTimeout(300_000);
-    await logIn(page);
-    await upload(page, ...MARKDOWN);
-    await upload(page, ...OTHERS);
-
-    const rows = await documentRows(page);
-    await expect(rows).toHaveCount(13);
+    test.setTimeout(1_800_000);
+    // One file per message, so no message has over 100 passages.
     for (const name of [...MARKDOWN, ...OTHERS]) {
-      const chunks = await rows
-        .filter({ hasText: name })
-        .getByRole("cell")
-        .nth(2)
-        .textContent();
-      note(name, `${chunks} chunks`);
-      expect(Number.parseInt(chunks ?? "", 10)).toBeGreaterThanOrEqual(1);
+      await inputAndConfirm(page, name);
+      conversationOf.set(name, page.url());
+      note(name, "confirmed");
     }
     await page.screenshot({
       path: path.join(EVIDENCE, "U1.png"),
@@ -298,26 +281,14 @@ test.describe("demo script @live", () => {
     });
   });
 
-  test("4. U2: a .docx is refused and the list stays at 13", async ({
-    page,
-  }) => {
-    await logIn(page);
-    const chooser = page.waitForEvent("filechooser");
-    await page.getByRole("button", { name: "選擇檔案" }).click();
-    await (
-      await chooser
-    ).setFiles(
-      path.join(
-        __dirname,
-        "../../.scratch/kb-chatbot/fixtures/upload/not-supported.docx",
-      ),
-    );
-    await page.getByRole("button", { name: "上傳" }).click();
+  test("4. U2: an unsupported format is refused", async ({ page }) => {
+    await page.goto("/");
+    const reply = await sendFiles(page, [
+      { name: "budget.xlsx", buffer: Buffer.from("PK") },
+    ]);
 
-    await expect(page.getByRole("main").getByRole("alert")).toHaveText(
-      "不支援的檔案格式",
-    );
-    await expect(await documentRows(page)).toHaveCount(13);
+    await expect(reply).toContainText("不支援的檔案格式");
+    await expect(reply.getByRole("region", { name: "提案" })).toHaveCount(0);
     await page.screenshot({
       path: path.join(EVIDENCE, "U2.png"),
       fullPage: true,
@@ -345,14 +316,11 @@ test.describe("demo script @live", () => {
       .getByRole("list", { name: "出處" })
       .getByRole("listitem")
       .filter({
-        hasText:
-          /^\[\d+\] 05-projects-and-practice\.md › .*C\. 移動微型空間計畫/,
+        hasText: /05-projects-and-practice\.md › .*C\. 移動微型空間計畫/,
       })
       .first();
     await citation.locator("summary").click();
-    const passage = normalize(
-      (await citation.getByRole("paragraph").textContent()) ?? "",
-    );
+    const passage = normalize((await citation.textContent()) ?? "");
     note("C1 passage", passage);
     await reply.answer.screenshot({ path: path.join(EVIDENCE, "C1.png") });
     for (const fact of ["旅梯計畫", "2017–2023", "5 站", "站數（截至 2023）"])
@@ -362,7 +330,7 @@ test.describe("demo script @live", () => {
   for (const id of ["Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11"])
     answerKeyTest(id);
 
-  test("7. Q12: a question the documents don't cover is refused", async ({
+  test("7. Q12: a question the knowledge base doesn't cover is refused", async ({
     page,
   }) => {
     test.setTimeout(180_000);
@@ -375,30 +343,20 @@ test.describe("demo script @live", () => {
   test("8. U3 and Q6-after-delete: deleting Q6's sources makes it refused", async ({
     page,
   }) => {
-    test.setTimeout(180_000);
-    await logIn(page);
-    const rows = await documentRows(page);
-    for (const name of ["faq.txt", "07-megaweaving-net-platform.md"]) {
-      // A retry finds the documents already deleted by the first attempt.
-      if (!(await rows.filter({ hasText: name }).count())) continue;
-      await rows
-        .filter({ hasText: name })
-        .getByRole("button", { name: "刪除" })
-        .click();
-      await expect(rows.filter({ hasText: name })).toHaveCount(0);
+    test.setTimeout(300_000);
+    // Each from its card, in the conversation step 3 attached it in.
+    for (const name of Q6_SOURCES) {
+      const conversation = conversationOf.get(name);
+      expect(conversation, `step 3 attached ${name}`).toMatch(/\?c=/);
+      await page.goto(conversation!);
+      const card = page.getByRole("region", { name: "提案" });
+      await card.getByText("刪除來源").click();
+      await card.getByRole("button", { name: "永久刪除" }).click();
+      await expect(card.getByRole("status")).toHaveText(/來源已刪除/);
+      note(name, "deleted");
     }
-    await expect(rows).toHaveCount(11);
-    await page.screenshot({
-      path: path.join(EVIDENCE, "U3.png"),
-      fullPage: true,
-    });
-
-    await page.goto("/");
-    await page.getByRole("button", { name: "新對話" }).click();
-    await expectRefuses(
-      "Q6-after-delete",
-      await askFollowUp(page, KEY.Q6.question),
-    );
+    await page.screenshot({ path: path.join(EVIDENCE, "U3.png") });
+    await expectRefuses("Q6-after-delete", await ask(page, KEY.Q6.question));
   });
 
   // Not Demo Script steps: tickets 06b, 12 and 13, run on the same documents.
@@ -446,11 +404,7 @@ test.describe("demo script @live", () => {
       await reply.answer.screenshot({ path: path.join(EVIDENCE_12, "2.png") });
 
       expect(reply.text).toContain("台新");
-      const labels = await reply.answer
-        .getByRole("list", { name: "出處" })
-        .getByRole("listitem")
-        .locator("summary")
-        .allTextContents();
+      const labels = await citationTexts(reply.answer);
       note("citations", labels.join("\n"));
       // Both documents state where the project started; either one is a
       // correct citation.
@@ -460,9 +414,7 @@ test.describe("demo script @live", () => {
       ];
       expect(
         labels.some((label) =>
-          sources.some((source) =>
-            citesMatch(label.replace(/^\[\d+\] /, ""), source),
-          ),
+          sources.some((source) => citesMatch(label, source)),
         ),
         `a citation points to ${sources.join("｜")}:\n${labels.join("\n")}`,
       ).toBe(true);

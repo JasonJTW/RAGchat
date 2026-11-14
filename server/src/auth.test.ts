@@ -1,89 +1,103 @@
 import request from "supertest";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { app } from "./app.js";
+import { stubSession } from "./stub-auth.js";
 
-describe("admin API without a session", () => {
-  it("refuses to list documents", async () => {
-    const res = await request(app).get("/api/documents");
+// Every server test runs with stub sign-in (vitest.setup.ts): a request
+// carries the stub session cookie of a 成員 or a 訪客, or none.
+const member = stubSession("user_member", "member");
+const guest = stubSession("user_guest", "guest");
 
-    expect(res.status).toBe(401);
+const ID = "00000000-0000-0000-0000-000000000000";
+const knowledgeBaseCalls = {
+  chat: () => request(app).post("/api/chat").send({ messages: [] }),
+  confirm: () => request(app).post(`/api/proposals/${ID}/confirm`),
+  reject: () => request(app).post(`/api/proposals/${ID}/reject`),
+  upload: () =>
+    request(app)
+      .post("/api/sources")
+      .attach("files", Buffer.from("內容"), "faq.txt"),
+};
+
+describe("a caller who is not signed in", () => {
+  it("gets 401 from every knowledge base API", async () => {
+    for (const [name, call] of Object.entries(knowledgeBaseCalls)) {
+      const res = await call();
+      expect(res.status, name).toBe(401);
+    }
   });
 
-  it("refuses to upload documents", async () => {
+  it("gets 401 from /api/me", async () => {
+    expect((await request(app).get("/api/me")).status).toBe(401);
+  });
+
+  it("gets 401 with a malformed stub session", async () => {
     const res = await request(app)
-      .post("/api/documents")
-      .attach("files", Buffer.from("內容"), "faq.txt");
-
+      .get("/api/me")
+      .set("Cookie", "stub_session=nonsense");
     expect(res.status).toBe(401);
-  });
-
-  it("still answers chat", async () => {
-    const res = await request(app).post("/api/chat").send({ messages: [] });
-
-    expect(res.status).toBe(200);
   });
 });
 
-describe("POST /api/login", () => {
-  beforeEach(() => {
-    vi.stubEnv("ADMIN_USERNAME", "admin");
-    vi.stubEnv("ADMIN_PASSWORD", "correct-horse");
-  });
-  afterEach(() => {
-    vi.unstubAllEnvs();
+describe("a signed-in user outside the MegaWeaving Organization (訪客)", () => {
+  it("gets 403 from every knowledge base API until they pass the human check (trial.test.ts)", async () => {
+    for (const [name, call] of Object.entries(knowledgeBaseCalls)) {
+      const res = await call().set("Cookie", guest);
+      expect(res.status, name).toBe(403);
+      expect(res.body).toMatchObject({ code: "verify" });
+    }
   });
 
-  it("opens the admin API with the right credentials", async () => {
-    const agent = request.agent(app);
+  it("is told by /api/me that they are a guest", async () => {
+    const res = await request(app).get("/api/me").set("Cookie", guest);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      userId: "user_guest",
+      role: "guest",
+      trial: { verified: false },
+    });
+  });
+});
 
-    const login = await agent
+describe("a 成員", () => {
+  it("is told by /api/me that they are a member", async () => {
+    const res = await request(app).get("/api/me").set("Cookie", member);
+    expect(res.body).toEqual({ userId: "user_member", role: "member" });
+  });
+
+  it("reaches the knowledge base APIs", async () => {
+    const chat = await request(app)
+      .post("/api/chat")
+      .set("Cookie", member)
+      .send({ messages: [] });
+    expect(chat.status).toBe(200);
+    const unknown = await request(app)
+      .post(`/api/proposals/${ID}/confirm`)
+      .set("Cookie", member);
+    expect(unknown.status).toBe(404);
+    // No file: refused before anything reaches the team workspace.
+    expect(
+      (await request(app).post("/api/sources").set("Cookie", member)).status,
+    ).toBe(400);
+  });
+});
+
+describe("the old document store", () => {
+  it("is gone", async () => {
+    for (const call of [
+      request(app).get("/api/documents"),
+      request(app).delete("/api/documents/x"),
+      request(app).get("/api/documents/x/chunks"),
+    ])
+      expect((await call.set("Cookie", member)).status).toBe(404);
+  });
+});
+
+describe("the old admin login", () => {
+  it("is gone", async () => {
+    const res = await request(app)
       .post("/api/login")
-      .send({ username: "admin", password: "correct-horse" });
-
-    expect(login.status).toBe(204);
-    expect(login.headers["set-cookie"]?.[0]).toMatch(/HttpOnly/i);
-    expect((await agent.get("/api/documents")).status).toBe(200);
-  });
-
-  it("rejects a wrong password", async () => {
-    const agent = request.agent(app);
-
-    const login = await agent
-      .post("/api/login")
-      .send({ username: "admin", password: "wrong" });
-
-    expect(login.status).toBe(401);
-    expect(login.headers["set-cookie"]).toBeUndefined();
-    expect((await agent.get("/api/documents")).status).toBe(401);
-  });
-
-  it("defaults the username to admin", async () => {
-    vi.stubEnv("ADMIN_USERNAME", undefined);
-
-    const login = await request(app)
-      .post("/api/login")
-      .send({ username: "admin", password: "correct-horse" });
-
-    expect(login.status).toBe(204);
-  });
-
-  it("rejects a body without a password as malformed", async () => {
-    const login = await request(app)
-      .post("/api/login")
-      .send({ username: "admin" });
-
-    expect(login.status).toBe(400);
-  });
-
-  it("lets nobody in while ADMIN_PASSWORD is unset, and says so", async () => {
-    vi.stubEnv("ADMIN_PASSWORD", "");
-
-    const login = await request(app)
-      .post("/api/login")
-      .send({ username: "admin", password: "" });
-
-    expect(login.status).toBe(503);
-    expect(login.headers["set-cookie"]).toBeUndefined();
-    expect(login.body).toEqual({ error: "ADMIN_PASSWORD is not set" });
+      .send({ username: "admin", password: "x" });
+    expect(res.status).toBe(404);
   });
 });

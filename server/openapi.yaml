@@ -1,9 +1,30 @@
 openapi: 3.1.0
 info:
-  title: kb-chatbot server
+  title: MegaWeaving team wiki server
   version: 0.1.0
 servers:
   - url: http://localhost:4000
+# Every route but /health needs a Clerk session (the `__session` cookie the
+# web app's sign-in sets, or a bearer session token). Knowledge base routes
+# act in the caller's workspace: a 成員's is the team workspace, a 訪客's
+# their own 試用工作區 (see /api/trial/verify), never anyone else's. 401 when
+# nobody is signed in, 403 (`code: verify`) for a 訪客 who has not passed
+# the human check today. A 訪客 is answered by GUEST_MODEL and held to the
+# trial's limits (429 / 413, see GuestLimit).
+#
+# De-identification (ADR-0004): in the team workspace every text a caller
+# sends (chat messages, files, inline edits) has its sensitive values (names,
+# organisations, phones, emails, addresses, ID and company numbers, amounts,
+# terms marked 敏感) replaced by pseudonyms like 〔人名3〕 before it reaches a
+# model or a table, and every response (chat stream included) has the real
+# values put back, so callers only ever see real values. An input holding a
+# password or an API key is refused and stores nothing. When de-identification
+# can't run (Presidio Analyzer down, PSEUDONYM_ENCRYPTION_KEY missing or
+# wrong) nothing is sent on: JSON routes answer 503. A 訪客's trial workspace
+# is not de-identified.
+security:
+  - clerkSession: []
+  - clerkBearer: []
 paths:
   /health:
     get:
@@ -17,32 +38,209 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Health"
+  /api/me:
+    get:
+      operationId: getMe
+      summary: Who is signed in, and whether they are a 成員 or a 訪客
+      description: >
+        Members of the MegaWeaving Clerk Organization (`CLERK_MEMBER_ORG_ID`)
+        are `member`; every other signed-in user is a `guest`, told whether
+        they passed the human check today (`trial.verified`).
+      responses:
+        "200":
+          description: The signed-in user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/trial/verify:
+    post:
+      operationId: verifyGuest
+      summary: A 訪客 passes the human check (Cloudflare Turnstile) and gets their 試用工作區
+      description: >
+        The first pass makes the 訪客's 試用工作區 from the 示範資料 (a copy
+        of a template; no model is called). A pass holds for 24 hours; passing
+        again keeps the trial as it is.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+                  description: The Turnstile widget's token
+      responses:
+        "200":
+          description: Passed; the trial workspace is ready
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [verified]
+                properties:
+                  verified:
+                    type: boolean
+                    const: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: The token did not pass, or the caller is a 成員
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/trial/reset:
+    post:
+      operationId: resetTrial
+      summary: Put the 訪客's 試用工作區 back to the 示範資料
+      description: >
+        Deletes the trial's sources, facts, proposals and conversations and
+        copies the 示範資料 in again. A trial with no request for 7 days is
+        deleted; the 訪客 then starts again from the 示範資料.
+      responses:
+        "200":
+          description: Reset
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reset]
+                properties:
+                  reset:
+                    type: boolean
+                    const: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >
+            The caller is a 成員, or a 訪客 who has not passed the human check
+            today (`code: verify`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/trial/example:
+    get:
+      operationId: getTrialExample
+      summary: The example file a 訪客 uploads to see a 取代 happen
+      responses:
+        "200":
+          description: meeting-2026-11-12.txt
+          content:
+            text/plain:
+              schema:
+                type: string
   /api/chat:
     post:
       operationId: postChat
-      security: []
-      summary: Answer a question from the uploaded documents
+      summary: Answer a question, or propose the facts of an input or a correction
       description: >
-        Answers the latest user message from the 6 passages that best match
-        it (embedding cosine and BM25, merged by reciprocal rank fusion).
+        The latest user message is input, a correction or a question. A message that
+        attaches files (`file` parts), or opens with an instruction to record
+        what follows (e.g. 「請把以下內容輸入到知識庫：…」, 「記下：…」), is
+        input, run through the input subgraph that `POST /api/sources` also
+        uses. Each attached file (.md, .txt, .pdf, .docx; at most 10, 5 MB
+        each) becomes a 來源 with its passages (split by heading, page, Q/A
+        pair or paragraph, 800 tokens at most), and the message's text only a
+        note to the extraction; a message without files is itself the 來源.
+        The extract model draws atomic facts from each passage (or the
+        message), told that the content is data, never instructions. The
+        reply has, per 來源, a short text and a `data-proposal` part whose
+        `data` is the pending Proposal. A file of another format refuses the
+        whole message: the reply is the text 「不支援的檔案格式：<names>…」
+        and nothing is stored; so is a file over 5 MB or an input of over 100
+        passages. A file without text (e.g. a scanned PDF) is answered
+        「<name>：無法抽出文字…」 with no proposal. A file (name or text) that
+        holds a password or an API key refuses the whole message the same
+        way, with 「這則內容含有密碼或 API key…」. Nothing enters the
+        knowledge base until a member confirms a proposal with
+        `POST /api/proposals/{id}/confirm`; no reply of the chat writes to
+        it, whatever the files say.
+
+        A latest message whose text holds a password or an API key is
+        answered 「這則內容含有密碼或 API key…」 and goes no further: no model
+        sees it, and a saved conversation keeps it as
+        「（已移除：這則訊息含有密碼或 API key）」 (so do earlier user messages
+        of the history that hold one, which are also blanked before the
+        agent sees them). When de-identification can't run, the reply is
+        「去識別服務暫時無法使用…」 and nothing is sent on or stored.
+
+        A message that says something is not so, was changed, or no longer
+        applies (e.g. 「R 不是取代率，是回收率」, 「…改成…」, 「…已經過時了」,
+        「更正：…」) and does not end in a question mark is a correction. The
+        facts it may be about are the current facts the latest assistant
+        message cited (its `data-citation` parts of kind `fact`, sent back
+        with the history; ids that are not current facts of the caller's
+        workspace are ignored), then the facts most similar to it, at most 6.
+        The extract model picks from those by number which facts the
+        correction replaces (取代, with the new text) or marks 過時 (no
+        replacement), with a reason and the date it took effect (no date:
+        now; kept between the fact's valid-from and now). The reply is a
+        short text and a `data-proposal` part with 取代 and 過時 items; when
+        other pending proposals already change the same fact, the text says
+        so. When confirming the proposal would expire older pending items
+        (the proposal's `expires`), the text of either kind of input says
+        how many. When no fact is meant, the reply says it found none and proposes
+        nothing. Nothing changes until the proposal is confirmed.
+
+        A message ending in a question whose preceding sentences correct
+        (e.g. 「R 已經改成回收率了，那現在 A 怎麼算？」) does both: the part
+        before the question is the correction, proposed as above, and the
+        whole message is then answered as a question from the facts as they
+        were before the correction (it is pending), the answer text ending
+        with a note that the correction just proposed is 待確認. A clause
+        that itself asks (什麼, 嗎, 哪, 怎麼, …) does not correct, so
+        「R 改成什麼了？」 is only a question.
+
+        Any other message is a question, answered from the workspace's
+        current confirmed facts and the
+        passages of its file 來源 with a confirmed proposal (the 2 best by
+        embedding cosine and pg_trgm keyword similarity, merged by reciprocal
+        rank fusion), merged by cosine similarity. The facts (at most 6) come
+        from four lanes fused by reciprocal rank: embedding cosine, pg_trgm
+        keyword similarity (names and codes such as 「EF-07」), the entity
+        graph (entities the question names, up to two hops), and time. A
+        question naming a past time (「三月時…」「去年」「上週」「2026-05-14」,
+        read in Taiwan time) is answered from the facts that held at some
+        time in it, the time lane ranking first those that began or ended
+        then; such a fact no longer current is labelled with both dates and
+        its text ends with what changed afterwards, and no 待確認 fact is
+        drawn on. A pending or rejected
+        file's passages are never answered from. Then up to 3 待確認 facts
+        (of live items of pending proposals) with cosine ≥ 0.3 follow. A
+        待確認 fact that would replace a confirmed one comes right after it
+        (the confirmed one added if missing), and the two are cited together,
+        the confirmed one first; a 待確認 citation carries its `proposal` so
+        it can be confirmed from the answer.
         When earlier messages are sent, the latest one is first rewritten
         into a standalone question for retrieval, and the answer sees the
-        whole conversation. The conversation lives only in the client.
-        When the latest message is the only one and contains 它, 那, 這 or
-        其, the chat model is asked whether it names its subject, while the
-        answer is prepared alongside and held back. If it does not, the
-        answer is dropped and the reply is the fixed sentence
-        「請問你指的是哪個計畫或主題？」 with no citations; otherwise the
-        held answer is streamed as usual.
+        whole conversation. The client sends the whole conversation each
+        time; with an `id`, the messages and the reply are saved as the
+        caller's conversation (see /api/conversations) before the stream
+        ends, also when the client leaves mid-reply; an attached file is
+        saved as its `filename` and `mediaType` only, never its data.
+        When the latest message is the only one, Jev (TypeSafe) is asked,
+        within 1.5 s and while retrieval runs alongside, whether it points at
+        a subject it never names. If it does, the reply is the fixed sentence
+        「請問你指的是哪個計畫或主題？」 with no citations; on a Jev failure,
+        timeout or no JEV_API_KEY the question is answered as usual. The
+        check is skipped, by rule, for a message with a `file` part, one that
+        also corrects, and one with an input keyword (輸入, 記下, 記錄, 記住, 寫入, 存入, 存進,
+        新增, 加入, 更新, 補充, 更正, 修正, 改成, 改為).
         Streams the answer as an AI SDK UI message stream (Server-Sent Events).
-        After the text, each passage the answer marks with `[n]` arrives as a
-        `data-citation` part in the same stream, with `data` shaped like
-        Citation. Passages the answer doesn't mark are not sent.
-        When no stored chunk is similar enough to the question (best cosine
+        After the text, each fact or passage the answer marks with `[n]`
+        arrives as a `data-citation` part in the same stream, with `data`
+        shaped like Citation. Evidence the answer doesn't mark is not sent.
+        When no fact or stored chunk is similar enough to the question (best cosine
         similarity below 0.3), or the passages don't answer it, the answer is
-        the fixed refusal 「這個問題我無法回答，請來信客服
-        support@megaweaving.example。」 with no citations; below the
-        similarity threshold the model is not called.
+        the fixed refusal 「知識庫裡沒有這件事的資料。如果你知道，可以直接告訴我，
+        我會整理成提案請團隊確認。」 with no citations; below the similarity
+        threshold the model is not called.
       requestBody:
         required: true
         content:
@@ -51,6 +249,8 @@ paths:
               type: object
               required: [messages]
               properties:
+                id:
+                  $ref: "#/components/schemas/ConversationId"
                 messages:
                   type: array
                   description: AI SDK UIMessage objects, oldest first
@@ -75,7 +275,17 @@ paths:
                               description: >
                                 At most 2000 characters in a user message,
                                 20000 in other messages
+                        description: >
+                          `text` parts are read as the message. A `file` part
+                          (AI SDK FileUIPart: `filename`, and `url` a base64
+                          data URL) in the latest user message is an attached
+                          file to input; earlier messages' files are ignored,
+                          so a client may leave them out.
       responses:
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NotAMember"
         "200":
           description: UI message stream
           content:
@@ -84,84 +294,308 @@ paths:
                 type: string
         "400":
           description: >
-            `messages` is missing or malformed, has more than 50 messages, or
-            has a text over its length limit
+            `messages` is missing or malformed, has more than 50 messages, has
+            a text over its length limit, or its latest message attaches more
+            than 10 files or a file whose `url` is not a base64 data URL; or
+            `id` is malformed
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  /api/login:
-    post:
-      operationId: login
-      security: []
-      summary: Log in to the admin
-      description: >
-        Checks the credentials against `ADMIN_USERNAME` (default `admin`) and
-        `ADMIN_PASSWORD`. While `ADMIN_PASSWORD` is unset nobody can log in
-        (503).
-        Sessions live in memory, so restarting the server logs the admin out.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [username, password]
-              properties:
-                username:
-                  type: string
-                password:
-                  type: string
-      responses:
-        "204":
-          description: Logged in
-          headers:
-            Set-Cookie:
-              description: "`admin_session` cookie (HttpOnly, SameSite=Lax)"
-              schema:
-                type: string
-        "400":
-          description: The body is missing a username or password
+        "413":
+          description: >
+            The request body is over 20 MB; or, for a 訪客, a file is over
+            1 MB (`code: file size`)
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "503":
-          description: "`ADMIN_PASSWORD` is not set, so nobody can log in"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-  /api/documents:
+        "429":
+          $ref: "#/components/responses/GuestLimit"
+        "404":
+          $ref: "#/components/responses/ConversationNotFound"
+  /api/conversations:
     get:
-      operationId: listDocuments
-      summary: List uploaded documents
-      security:
-        - adminSession: []
+      operationId: listConversations
+      summary: The caller's saved conversations, most recently continued first
+      description: >
+        Only the caller's own conversations in their workspace; nobody sees
+        another 成員's.
       responses:
         "200":
-          description: Documents, oldest first
+          description: The caller's conversations
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: "#/components/schemas/DocumentSummary"
+                  $ref: "#/components/schemas/ConversationSummary"
         "401":
           $ref: "#/components/responses/Unauthorized"
-    post:
-      operationId: uploadDocuments
-      summary: Upload one or more documents (at most 10 files, 5 MiB each)
-      security:
-        - adminSession: []
+        "403":
+          $ref: "#/components/responses/NotAMember"
+  /api/conversations/{id}:
+    get:
+      operationId: getConversation
+      summary: One of the caller's conversations, with its messages
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ConversationId"
+      responses:
+        "200":
+          description: The conversation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Conversation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NotAMember"
+        "404":
+          $ref: "#/components/responses/ConversationNotFound"
+  /api/proposals:
+    get:
+      operationId: listPendingProposals
+      summary: List the workspace's pending proposals
       description: >
-        Responds once every file is chunked, embedded, and saved. Markdown is
-        split by heading, PDF by page (a PDF without a text layer gets 0
-        chunks), txt by Q/A pair or paragraph; any other format refuses the
-        whole request (415). All or nothing:
-        if embedding or saving fails, none of the files are added.
+        Every pending proposal of the caller's workspace, whoever made it,
+        oldest first. Any member may confirm or reject any of them. A
+        proposal whose every item expired is `expired` and not listed.
+      responses:
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NotAMember"
+        "200":
+          description: The pending proposals, oldest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Proposal"
+  /api/proposals/{id}:
+    get:
+      operationId: getProposal
+      summary: Read a proposal as it stands now
+      description: >
+        The proposal of the caller's workspace, whatever its status, as its
+        card shows it now (re-identified): what a card saved in a
+        conversation refreshes from when the conversation is reopened.
+      parameters:
+        - $ref: "#/components/parameters/ProposalId"
+      responses:
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NotAMember"
+        "200":
+          description: The proposal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Proposal"
+        "404":
+          $ref: "#/components/responses/ProposalNotFound"
+  /api/proposals/{id}/confirm:
+    post:
+      operationId: confirmProposal
+      summary: Confirm a pending proposal into the knowledge base
+      description: >
+        The only way facts enter the knowledge base. Each of the proposal's
+        facts becomes confirmed, recorded now and confirmed by the caller.
+        Of two calls deciding one proposal at once, only the first succeeds.
+        Items unticked on the card are sent as `excluded`: they take no
+        effect (their facts are rejected, their 取代/過時 targets left as
+        they are, and the item's `status` says `rejected`) and count in
+        neither the re-check against changes since nor the expiry of older
+        items; at least one live item must stay ticked, and an expired item
+        can't be excluded. A stopped (409) call unticks nothing.
+        Items edited inline on the card are sent as `edits`: each such fact
+        takes the edited text (trimmed, de-identified like any input; one
+        holding a secret answers 422), embedded anew, and keeps the text
+        as extracted and the caller as its editor (`edited`). An edit whose
+        text equals the item's changes nothing; a 過時 item adds no fact and
+        can't be edited. Each fact a 取代 or 過時 item targets leaves the
+        knowledge base as of the item's `effectiveAt` (its valid-to), kept
+        in history; a 取代 item's fact becomes its `supersededBy`, so the
+        replaced versions show in the citation's `history`.
+
+
+        Any member may confirm a proposal another member made; the caller
+        is its `decidedBy` and its facts' confirmer. Confirming is re-checked
+        against the changes confirmed since the proposal was made, after the
+        edits are applied: a change touches an item when it changed the
+        item's target, or one of its facts is about the same thing as one of
+        the item's (cosine of the new facts and targets at least 0.75). Unless
+        every such change's id is in `acknowledged`, the call is answered 409
+        with the `conflicts` and nothing is written. Confirmed anyway, a 取代
+        or 過時 of a target replaced since applies to the fact now in its
+        place (the item's `target` then names it); when that chain ended in
+        過時, a 過時 does nothing and a 取代's fact follows it. Confirming
+        expires the pending items of older proposals that change the same
+        fact or make the same claim about the same entity (cosine at least
+        0.9, and a common entity unless one side speaks of none) as one of
+        its items: their `expiredBy` is this proposal and their facts never
+        enter the knowledge base; an older proposal with no live item left
+        becomes `expired`. Confirmations of a workspace run one at a time,
+        so of two rival proposals confirmed at once only one succeeds.
+
+
+        Each of `relinks` makes a new entity of the ticked items' facts
+        (see `Proposal.entities`, `new`) the existing entity the member
+        chose instead: those facts speak of it, their relations join it, and
+        the new entity's name becomes its 別名 (alias), so a question by
+        either name finds them.
+      parameters:
+        - $ref: "#/components/parameters/ProposalId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                excluded:
+                  type: array
+                  maxItems: 1000
+                  description: Items of this proposal to leave out (unticked)
+                  items:
+                    type: string
+                    format: uuid
+                edits:
+                  type: array
+                  maxItems: 1000
+                  items:
+                    type: object
+                    required: [itemId, content]
+                    properties:
+                      itemId:
+                        type: string
+                        format: uuid
+                        description: An item of this proposal
+                      content:
+                        type: string
+                        minLength: 1
+                        maxLength: 2000
+                        description: The item's text as edited; not blank
+                acknowledged:
+                  type: array
+                  maxItems: 500
+                  description: >
+                    The `changeId`s of the conflicts the member saw and
+                    confirms anyway
+                  items:
+                    type: string
+                    format: uuid
+                relinks:
+                  type: array
+                  maxItems: 200
+                  description: >
+                    New entities of this proposal to relink to existing ones
+                  items:
+                    type: object
+                    required: [entityId, to]
+                    properties:
+                      entityId:
+                        type: string
+                        format: uuid
+                        description: A new entity of this proposal (`new` true), once each
+                      to:
+                        type: string
+                        format: uuid
+                        description: >
+                          Another live entity of the workspace, e.g. one of
+                          the entity's `candidates`
+      responses:
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NotAMember"
+        "200":
+          description: The proposal, now `confirmed`
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Proposal"
+        "400":
+          description: >
+            An edit or an excluded id names no item of this proposal, an
+            edit's text is blank or longer than 2000 characters, every
+            item is excluded, or a relink names no new entity of this
+            proposal or no other live entity; nothing is decided
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/ProposalNotFound"
+        "422":
+          description: An edit holds a password or an API key; nothing was written
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >
+            The proposal was already decided or expired; or the knowledge
+            base changed since it was made, and the changes not acknowledged
+            are listed in `conflicts` (all of them, acknowledged or not);
+            nothing is decided
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error:
+                    type: string
+                  conflicts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Conflict"
+  /api/proposals/{id}/reject:
+    post:
+      operationId: rejectProposal
+      summary: Reject a pending proposal
+      description: >
+        None of the proposal's facts enter the knowledge base, now or later.
+      parameters:
+        - $ref: "#/components/parameters/ProposalId"
+      responses:
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NotAMember"
+        "200":
+          description: The proposal, now `rejected`
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Proposal"
+        "404":
+          $ref: "#/components/responses/ProposalNotFound"
+        "409":
+          $ref: "#/components/responses/ProposalDecided"
+  /api/sources:
+    post:
+      operationId: uploadSources
+      summary: Input files as 來源, each proposing its facts (at most 10 files, 5 MiB each)
+      description: >
+        The upload entry of the input subgraph the chat's attachments use
+        (see `POST /api/chat`): each file (.md, .txt, .pdf, .docx) becomes a
+        來源 with its passages and one pending Proposal of the facts the
+        extract model draws from it. Responds once every proposal is made.
+        Nothing enters the knowledge base until a member confirms a proposal;
+        whatever a file says, it can only be proposed. A file without text
+        (e.g. a scanned PDF) or without facts makes no proposal and is listed
+        in `skipped`. A refused request (415, 413, 422, 503) stores none of
+        the files. Each file's name and text are de-identified before
+        anything else reads them.
       requestBody:
         required: true
         content:
@@ -175,158 +609,688 @@ paths:
                     type: string
                     format: binary
       responses:
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NotAMember"
         "201":
-          description: The documents that were added
+          description: The proposals made, one per file with facts
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/DocumentSummary"
+                type: object
+                required: [proposals, skipped]
+                properties:
+                  proposals:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Proposal"
+                  skipped:
+                    type: array
+                    description: Files that made no proposal, and why
+                    items:
+                      type: object
+                      required: [filename, reason]
+                      properties:
+                        filename:
+                          type: string
+                        reason:
+                          type: string
+                          enum: [無法抽出文字, 沒有可以記下的事實]
         "400":
-          description: More than 10 files in one request
+          description: No file, or more than 10 files in one request
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/GuestLimit"
         "413":
-          description: A file is larger than 5 MiB
+          description: >
+            A file is larger than 5 MiB (1 MB for a 訪客, `code: file size`),
+            or the files have over 100 passages in all
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
         "415":
-          description: A file is not .md, .pdf, or .txt; none of the files were added
+          description: >
+            A file is not .md, .txt, .pdf or .docx (the error starts
+            「不支援的檔案格式」); none of the files were stored
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-        "500":
-          description: Embedding or saving failed; none of the files were added
+        "422":
+          description: >
+            A file holds a password or an API key (the error starts
+            「這則內容含有密碼或 API key」); none of the files were stored
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-  /api/documents/{id}:
+        "503":
+          $ref: "#/components/responses/DeidentificationUnavailable"
+  /api/sources/{id}:
     delete:
-      operationId: deleteDocument
-      summary: Delete a document with its chunks and embeddings
+      operationId: deleteSource
+      summary: Hard-delete a 來源 and everything drawn from it (its uploader only)
       description: >
-        Responds once the removal is saved; answers stop citing the document
-        immediately, and it stays deleted across a restart.
-      security:
-        - adminSession: []
+        The one exception to 來源 being immutable. In one transaction: the
+        source, its passages, facts (with their embeddings, entity links,
+        aliases and edges) and proposals are deleted; entities no live fact
+        links to any more, and pseudonyms no other row uses, go too. What its
+        proposals did is taken back: a fact it replaced (取代) or marked 過時
+        is current again (or, when its replacement was replaced since, is
+        followed by that newer version), pending items its confirmation
+        expired can be confirmed again, and other members' pending changes to
+        its facts are dropped. Proposal cards and citations of it leave saved
+        conversations. Only a record that a deletion happened stays: who,
+        when, and the source's id, with no content.
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
+            format: uuid
       responses:
         "204":
           description: Deleted
         "401":
           $ref: "#/components/responses/Unauthorized"
-        "404":
-          description: No document has that id
+        "403":
+          description: >
+            Not a member, or not the source's uploader (nothing was deleted)
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  /api/documents/{id}/chunks:
-    get:
-      operationId: listDocumentChunks
-      summary: List a document's chunks, in document order
-      security:
-        - adminSession: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: The document's chunks
+        "404":
+          description: No such source in the caller's workspace
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/ChunkSummary"
+                $ref: "#/components/schemas/Error"
+  /api/people:
+    get:
+      operationId: getDisplayNames
+      summary: Names to show for user ids
+      description: >
+        What to show for the user ids on cards and citations (who proposed,
+        confirmed or edited): the name Clerk has for each, cached for ten
+        minutes. An id that is not a Clerk user's (「示範資料」) is shown as
+        it is; one Clerk has no record of as （已刪除的使用者）; while Clerk
+        can't be reached, the ids themselves. A 訪客 is told only their own
+        name and the 示範資料's; other ids are left out.
+      parameters:
+        - name: ids
+          in: query
+          required: true
+          description: 1 to 100 user ids, comma-separated
+          schema:
+            type: string
+      responses:
         "401":
           $ref: "#/components/responses/Unauthorized"
-        "404":
-          description: No document has that id
+        "403":
+          $ref: "#/components/responses/NotAMember"
+        "400":
+          description: No ids, or more than 100
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "200":
+          description: Each id the caller may see, with its name
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: string
+  /api/terms:
+    get:
+      operationId: listTerms
+      summary: The terms marked sensitive and not sensitive
+      description: >
+        `sensitive` lists every value the workspace pseudonymises (those
+        found so far and those marked 敏感, oldest first) except the 排除詞;
+        `excluded` the terms marked not sensitive.
+      responses:
+        "200":
+          description: Both lists
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sensitive, excluded]
+                properties:
+                  sensitive:
+                    type: array
+                    items:
+                      type: string
+                  excluded:
+                    type: array
+                    items:
+                      type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NotForGuests"
+        "503":
+          $ref: "#/components/responses/DeidentificationUnavailable"
+    put:
+      operationId: markTerm
+      summary: Mark a term sensitive or not sensitive
+      description: >
+        `sensitive: true` gives the term a pseudonym (〔敏感詞N〕) and replaces
+        it in all later input; `false` makes it a 排除詞, never replaced in
+        later input even where it would be found. Either takes it off the
+        other list. Text stored before keeps what it had. The term goes in
+        the body, never the URL.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [term, sensitive]
+              properties:
+                term:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                  description: Trimmed
+                sensitive:
+                  type: boolean
+      responses:
+        "204":
+          description: Marked
+        "400":
+          description: A blank or overlong term, or no `sensitive` boolean
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NotForGuests"
+        "422":
+          description: The term holds a password or an API key; nothing stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          $ref: "#/components/responses/DeidentificationUnavailable"
+  /api/terms/excluded:
+    delete:
+      operationId: unmarkExcluded
+      summary: Take a term off the 排除詞 list
+      description: >
+        Detection decides about the term again. A term marked sensitive
+        can't be unmarked (its pseudonym stands in stored text); mark it not
+        sensitive instead.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [term]
+              properties:
+                term:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+      responses:
+        "204":
+          description: Taken off (also when it was not on the list)
+        "400":
+          description: A blank or overlong term
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NotForGuests"
 components:
   securitySchemes:
-    adminSession:
+    clerkSession:
       type: apiKey
       in: cookie
-      name: admin_session
+      name: __session
+    clerkBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: Clerk session JWT
+  parameters:
+    ProposalId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
   responses:
+    DeidentificationUnavailable:
+      description: >
+        De-identification can't run now (Presidio Analyzer down, or
+        PSEUDONYM_ENCRYPTION_KEY missing or wrong); nothing was sent on or
+        stored
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ConversationNotFound:
+      description: >
+        No conversation with that id is the caller's (another 成員's, or
+        another workspace's, counts as none)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ProposalNotFound:
+      description: No proposal with that id in the caller's workspace
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ProposalDecided:
+      description: The proposal was already confirmed or rejected
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
     Unauthorized:
-      description: Not logged in, or wrong credentials
+      description: Nobody is signed in
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    GuestLimit:
+      description: >
+        A 訪客 went over the trial's limits, and nothing was counted or
+        done: 30 messages a day (`code: messages`), 5 uploaded files a day,
+        in the chat or by /api/sources (`code: uploads`), or every 訪客's
+        messages and files together reached GUEST_DAILY_CAP (default 1000)
+        and guest trials are paused for the day (`code: paused`). Days are
+        Asia/Taipei. `error` says so in Chinese, for the 訪客 to read.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotForGuests:
+      description: >
+        A 訪客 (whose trial workspace is not de-identified, so has no terms),
+        or a 訪客 who has not passed the human check today (`code: verify`)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotAMember:
+      description: >
+        The caller is a 訪客 who has not passed the human check today
+        (`code: verify`; see /api/trial/verify)
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
   schemas:
+    ConversationId:
+      type: string
+      pattern: "^[\\w-]{1,64}$"
+      description: The chat id the client picks for a conversation
+    ConversationSummary:
+      type: object
+      required: [id, title, updatedAt]
+      properties:
+        id:
+          $ref: "#/components/schemas/ConversationId"
+        title:
+          type: string
+          description: The first user message, at most 40 characters
+        updatedAt:
+          type: string
+          format: date-time
+    Conversation:
+      allOf:
+        - $ref: "#/components/schemas/ConversationSummary"
+        - type: object
+          required: [messages]
+          properties:
+            messages:
+              type: array
+              description: >
+                AI SDK UIMessage objects, oldest first, as the chat showed
+                them (text, `file`, `data-citation` and `data-proposal`
+                parts). A `file` part has only `filename` and `mediaType`:
+                attachments' contents are not kept here. A proposal part is
+                the card as it was proposed.
+              items:
+                type: object
     Error:
       type: object
       required: [error]
       properties:
         error:
           type: string
+        code:
+          type: string
+          description: >
+            Present on 訪客 refusals: verify, messages, uploads, paused,
+            file size
     Citation:
       type: object
-      required: [id, marker, label, text]
+      required: [id, marker, kind, label, text]
       properties:
         id:
           type: string
+          format: uuid
+          description: The fact's id, or the passage's (a 來源 chunk)
         marker:
           type: integer
           minimum: 1
-          description: The `[n]` the answer marks the passage with
+          description: The `[n]` the answer marks it with
+        kind:
+          type: string
+          enum: [fact, passage]
+          description: A fact (confirmed, or 待確認 when `proposal` is present), or a passage of a confirmed file 來源
         label:
           type: string
-          description: "e.g. `05-projects-and-practice.md › 05 實踐案例 … › C. 移動微型空間計畫`, `04-founder-hsiao-yu-chih.pdf › 第 2 頁`, `faq.txt › Q: 網站有英文版嗎？`"
+          description: "A confirmed fact's is `知識庫 · <valid from, YYYY-MM-DD in Taiwan>`, or for one no longer current (a question about a past time) `知識庫 · <valid from> 起，<valid to> 止`, its `text` then ending with `（之後的變更：<date> 起改為「…」；<date> 起不再適用）`; a 待確認 fact's `待確認 · <valid from>`; a passage's e.g. `05-projects-and-practice.md › 05 實踐案例 … › C. 移動微型空間計畫`, `04-founder-hsiao-yu-chih.pdf › 第 2 頁`, `faq.txt › Q: 網站有英文版嗎？`"
         text:
           type: string
-          description: The passage's original text
-    ChunkSummary:
-      type: object
-      required: [path, preview, embeddingModel]
-      properties:
-        path:
+          description: The fact, or the passage's original text
+        edited:
+          $ref: "#/components/schemas/Edited"
+        history:
           type: array
           description: >
-            Markdown `[filename, H1, H2, H3]`, PDF `[filename, "第 N 頁"]`, txt
-            `[filename, the chunk's opening]`
+            A fact's whole history chain, oldest first: the versions it
+            replaced, the cited fact, and those that replaced it since (e.g.
+            取代率 → 回收率 → 取代率); present only when there is more than
+            the cited fact
           items:
-            type: string
-        preview:
+            $ref: "#/components/schemas/HistoryEntry"
+        source:
+          type: object
+          description: >
+            What a fact was drawn from: a message 來源 as given, or the
+            passage of a file 來源 (then with its `label`, e.g.
+            `meeting.txt › 一、運送排放`); absent for passages
+          required: [content, createdAt]
+          properties:
+            content:
+              type: string
+            createdAt:
+              type: string
+              format: date-time
+            label:
+              type: string
+        proposal:
+          $ref: "#/components/schemas/Proposal"
+          description: >
+            Present when the fact is 待確認: the pending 提案 it belongs to,
+            as its card shows it, so a member can confirm it from the answer
+            (POST /api/proposals/{id}/confirm)
+        replaces:
           type: string
-          description: The first 80 characters of the chunk
-        embeddingModel:
-          type: string
-          description: The embedding model id that produced the chunk's vector
-    DocumentSummary:
+          description: >
+            A 待確認 fact's: the confirmed fact it would replace (取代). The
+            two are cited together, the confirmed one first.
+    Proposal:
       type: object
-      required: [id, filename, chunkCount, uploadedAt]
+      description: >
+        A 提案: changes to the knowledge base waiting for a member. While
+        `pending`, its facts are not in the knowledge base.
+      required: [id, status, sourceId, createdBy, createdAt, items, entities]
       properties:
         id:
           type: string
-        filename:
+          format: uuid
+        sourceId:
           type: string
-        chunkCount:
-          type: integer
-          minimum: 0
-        uploadedAt:
+          format: uuid
+          description: >
+            The 來源 it was proposed from; its uploader (`createdBy`) may
+            hard-delete it (`DELETE /api/sources/{id}`)
+        status:
+          type: string
+          enum: [pending, confirmed, rejected, expired]
+          description: >
+            `expired` once a newer proposal's confirmation expired every item
+        createdBy:
+          type: string
+          description: The Clerk user id of the member who proposed it
+        createdAt:
           type: string
           format: date-time
+        decidedBy:
+          type: string
+          description: The member who confirmed or rejected it; absent while pending
+        expires:
+          type: array
+          description: >
+            Present while pending: the pending items of older proposals that
+            confirming it would expire
+          items:
+            type: object
+            required: [proposalId, itemId, kind, content, createdBy]
+            properties:
+              proposalId:
+                type: string
+                format: uuid
+              itemId:
+                type: string
+                format: uuid
+              kind:
+                type: string
+                enum: [add, supersede, obsolete]
+              content:
+                type: string
+                description: Its fact, or for 過時 the fact it would end
+              createdBy:
+                type: string
+        entities:
+          type: array
+          description: The 實體 its items' facts speak of
+          items:
+            $ref: "#/components/schemas/ProposalEntity"
+        items:
+          type: array
+          description: 取代 and 過時 items first, then 新增 ones
+          items:
+            type: object
+            required: [id, kind, status]
+            properties:
+              id:
+                type: string
+                format: uuid
+              kind:
+                type: string
+                enum: [add, supersede, obsolete]
+                description: 新增, 取代 or 過時
+              factId:
+                type: string
+                format: uuid
+                description: The fact the item adds (新增, 取代); absent for 過時
+              content:
+                type: string
+                description: That fact's text; absent for 過時
+              status:
+                type: string
+                enum: [pending, confirmed, rejected, expired]
+                description: >
+                  `pending` while the proposal is; once it is decided,
+                  whether the item took effect (`confirmed`) or not
+                  (`rejected`: the proposal was rejected, or the item was
+                  left unticked); `expired` once a newer proposal expired it
+                  (see `expiredBy`)
+              edited:
+                $ref: "#/components/schemas/Edited"
+              target:
+                type: object
+                description: The fact it replaces or marks 過時 (取代, 過時)
+                required: [factId, content, validFrom]
+                properties:
+                  factId:
+                    type: string
+                    format: uuid
+                  content:
+                    type: string
+                  validFrom:
+                    type: string
+                    format: date-time
+              reason:
+                type: string
+                description: Why the target changes (取代, 過時)
+              effectiveAt:
+                type: string
+                format: date-time
+                description: >
+                  When the change takes effect (取代, 過時): the target's
+                  valid-to and the replacement's valid-from once confirmed;
+                  for 新增, when its fact became true, read from the content
+                  (e.g. 「上週」, never later than now) or else when the
+                  source was given
+              expiredBy:
+                type: string
+                format: uuid
+                description: >
+                  The newer proposal whose confirmation expired the item
+                  (已過期); it is then never confirmed
+              entityIds:
+                type: array
+                description: The entities its fact speaks of (ids in `entities`)
+                items:
+                  type: string
+                  format: uuid
+    ProposalEntity:
+      type: object
+      description: >
+        A 實體 a proposal's facts speak of. New until a confirmed fact speaks
+        of it: [連結實體] found no existing entity it means.
+      required: [id, name, kind, new]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        kind:
+          type: string
+          enum:
+            [
+              person,
+              project,
+              feature,
+              method,
+              module,
+              organization,
+              document,
+              other,
+            ]
+        new:
+          type: boolean
+          description: No confirmed fact speaks of it yet
+        candidates:
+          type: array
+          description: >
+            For a new entity of a pending proposal: existing entities with
+            alike names, most alike first, to relink it to on confirm
+          items:
+            type: object
+            required: [id, name]
+            properties:
+              id:
+                type: string
+                format: uuid
+              name:
+                type: string
+    Conflict:
+      type: object
+      description: >
+        A change confirmed since a proposal was made that touches one of its
+        items
+      required: [itemId, changeId, kind, decidedBy, decidedAt]
+      properties:
+        itemId:
+          type: string
+          format: uuid
+          description: The proposal's item it touches
+        changeId:
+          type: string
+          format: uuid
+          description: The confirmed item that made the change
+        kind:
+          type: string
+          enum: [add, supersede, obsolete]
+        before:
+          type: string
+          description: The fact it replaced or marked 過時 (取代, 過時)
+        after:
+          type: string
+          description: The fact it added (新增, 取代)
+        decidedBy:
+          type: string
+        decidedAt:
+          type: string
+          format: date-time
+    HistoryEntry:
+      type: object
+      required: [factId, content, validFrom, validTo]
+      properties:
+        factId:
+          type: string
+          format: uuid
+        content:
+          type: string
+        validFrom:
+          type: string
+          format: date-time
+        validTo:
+          type: [string, "null"]
+          format: date-time
+          description: When the next version replaced it; null for the current one
+        reason:
+          type: string
+          description: Why it replaced the version before it; absent for the first
+    Edited:
+      type: object
+      description: >
+        Present when a member edited the fact's text inline on its proposal
+        card (經編輯)
+      required: [by, originalContent]
+      properties:
+        by:
+          type: string
+          description: The member who edited it
+        originalContent:
+          type: string
+          description: The text as extracted, before the edit
+    Me:
+      type: object
+      required: [userId, role]
+      properties:
+        userId:
+          type: string
+          description: Clerk user id
+        role:
+          type: string
+          enum: [member, guest]
+        trial:
+          type: object
+          description: A 訪客's only
+          required: [verified]
+          properties:
+            verified:
+              type: boolean
+              description: Passed the human check within the last 24 hours
     Health:
       type: object
       required: [ok]

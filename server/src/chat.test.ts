@@ -1,29 +1,53 @@
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Citation } from "./chat.js";
 import { installStubModels } from "./stub-models.js";
+import { createWorkspace, type Caller } from "./workspaces.js";
+
+// Each test is a 成員 in a workspace of its own (see proposals.test.ts).
+const caller = vi.hoisted(() => ({ current: undefined as unknown as Caller }));
+vi.mock("./workspaces.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./workspaces.js")>()),
+  callerOf: () => Promise.resolve(caller.current),
+}));
+
+const asMember = (app: Parameters<typeof request.agent>[0]) =>
+  request.agent(app);
 
 const FIXTURES = path.join(
   import.meta.dirname,
   "../../.scratch/kb-chatbot/fixtures/upload",
 );
 
-/** Starts the app fresh with only 05-projects-and-practice.md uploaded. */
+beforeEach(async () => {
+  caller.current = {
+    workspaceId: await createWorkspace("guest", "chat test"),
+    userId: "user_member",
+    role: "member",
+  };
+});
+
+/**
+ * Starts the app fresh, its knowledge base holding only
+ * 05-projects-and-practice.md, uploaded and confirmed: its passages and the
+ * facts drawn from them (one per sentence, by the stub model).
+ */
 async function startServerWithUpload() {
-  vi.stubEnv("DATA_DIR", mkdtempSync(path.join(tmpdir(), "kb-chat-test-")));
   vi.resetModules();
   const { app } = await import("./app.js");
-  const admin = request.agent(app);
-  await admin
-    .post("/api/login")
-    .send({ username: "admin", password: "correct-horse" });
+  const { inputFiles } = await import("./agent/input.js");
+  const { confirmProposal } = await import("./knowledge-base.js");
   const name = "05-projects-and-practice.md";
-  await admin
-    .post("/api/documents")
-    .attach("files", readFileSync(path.join(FIXTURES, name)), name);
+  const { workspaceId, userId } = caller.current;
+  const { proposals } = await inputFiles(
+    workspaceId,
+    userId,
+    [{ filename: name, bytes: readFileSync(path.join(FIXTURES, name)) }],
+    "member",
+  );
+  await confirmProposal(workspaceId, proposals[0].id, userId);
   return app;
 }
 
@@ -37,18 +61,19 @@ async function ask(
   app: Parameters<typeof request>[0],
   question: string,
   history: ChatTurn[] = [],
+  attachments: object[] = [],
 ) {
-  const res = await request(app)
+  const messages = [...history, { role: "user", text: question }].map(
+    ({ role, text }, i) => ({
+      id: `m${i}`,
+      role,
+      parts: [{ type: "text", text }] as object[],
+    }),
+  );
+  messages.at(-1)!.parts.push(...attachments);
+  const res = await asMember(app)
     .post("/api/chat")
-    .send({
-      messages: [...history, { role: "user", text: question }].map(
-        ({ role, text }, i) => ({
-          id: `m${i}`,
-          role,
-          parts: [{ type: "text", text }],
-        }),
-      ),
-    })
+    .send({ messages })
     .buffer(true)
     .parse((r, done) => {
       let body = "";
@@ -64,6 +89,7 @@ async function ask(
       (line) =>
         JSON.parse(line.slice("data: ".length)) as {
           type: string;
+          id?: string;
           delta?: string;
           data?: Citation;
         },
@@ -71,9 +97,6 @@ async function ask(
 }
 
 describe("POST /api/chat", () => {
-  beforeEach(() => {
-    vi.stubEnv("ADMIN_PASSWORD", "correct-horse");
-  });
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -81,16 +104,15 @@ describe("POST /api/chat", () => {
   it("rejects a body without a messages array with 400", async () => {
     vi.resetModules();
     const { app } = await import("./app.js");
-    const res = await request(app).post("/api/chat").send({ question: "hi" });
+    const res = await asMember(app).post("/api/chat").send({ question: "hi" });
     expect(res.status).toBe(400);
   });
 
   it("accepts an earlier answer over 2,000 characters in the history", async () => {
     installStubModels();
-    vi.stubEnv("DATA_DIR", mkdtempSync(path.join(tmpdir(), "kb-chat-test-")));
     vi.resetModules();
     const { app } = await import("./app.js");
-    const res = await request(app)
+    const res = await asMember(app)
       .post("/api/chat")
       .send({
         messages: [
@@ -134,12 +156,12 @@ describe("POST /api/chat", () => {
   ])("rejects %s with 400 and no stack trace", async (_, messages) => {
     vi.resetModules();
     const { app } = await import("./app.js");
-    const res = await request(app).post("/api/chat").send({ messages });
+    const res = await asMember(app).post("/api/chat").send({ messages });
     expect(res.status).toBe(400);
     expect(res.text).not.toMatch(/TypeError|\n\s+at /);
   });
 
-  it("streams the model's answer", async () => {
+  it("streams the model's answer as one text part", async () => {
     const { chat } = installStubModels();
     chat.reply = "旅梯計畫巡迴了 5 站。[1]";
     const app = await startServerWithUpload();
@@ -149,9 +171,12 @@ describe("POST /api/chat", () => {
     const deltas = parts.filter((p) => p.type === "text-delta");
     expect(deltas.length).toBeGreaterThan(1);
     expect(deltas.map((p) => p.delta).join("")).toBe(chat.reply);
+    // A second text part shows as an empty paragraph beside the answer.
+    expect(parts.filter((p) => p.type === "text-start")).toHaveLength(1);
+    expect(new Set(deltas.map((p) => p.id)).size).toBe(1);
   });
 
-  it("cites only the passages the answer marks, as numbered in the prompt", async () => {
+  it("cites only the evidence the answer marks, as numbered in the prompt", async () => {
     const { chat } = installStubModels();
     chat.reply = "旅梯計畫巡迴了 5 站。[2]";
     const app = await startServerWithUpload();
@@ -164,8 +189,7 @@ describe("POST /api/chat", () => {
     expect(citations).toHaveLength(1);
     const [citation] = citations;
     expect(citation.marker).toBe(2);
-    expect(citation.label).toMatch(/^05-projects-and-practice\.md › /);
-    // The cited text is the second passage the model was given.
+    // The cited text is the second piece of evidence the model was given.
     const [prompt] = chat.prompts;
     const at = prompt.indexOf(citation.text);
     expect(at).toBeGreaterThan(prompt.indexOf("[2]"));
@@ -199,8 +223,9 @@ describe("POST /api/chat", () => {
       .filter((p) => p.type === "text-delta")
       .map((p) => p.delta)
       .join("");
-    expect(text).toContain("這個問題我無法回答");
-    expect(text).toContain("support@megaweaving.example");
+    expect(text).toBe(
+      "知識庫裡沒有這件事的資料。如果你知道，可以直接告訴我，我會整理成提案請團隊確認。",
+    );
     expect(parts.some((p) => p.type === "data-citation")).toBe(false);
     expect(chat.prompts).toHaveLength(0);
   });
@@ -208,7 +233,7 @@ describe("POST /api/chat", () => {
   it("cites nothing when the model refuses", async () => {
     const { chat } = installStubModels();
     chat.reply =
-      "這個問題我無法回答，請來信客服 support@megaweaving.example。[1]";
+      "知識庫裡沒有這件事的資料。如果你知道，可以直接告訴我，我會整理成提案請團隊確認。[1]";
     const app = await startServerWithUpload();
 
     const parts = await ask(app, "旅梯計畫的贊助商是誰？");
@@ -224,7 +249,7 @@ describe("POST /api/chat", () => {
     await ask(app, "旅梯計畫總共巡迴了幾站？");
 
     expect(chat.prompts[0]).toContain(
-      "這個問題我無法回答，請來信客服 support@megaweaving.example。",
+      "知識庫裡沒有這件事的資料。如果你知道，可以直接告訴我，我會整理成提案請團隊確認。",
     );
   });
 
@@ -249,7 +274,7 @@ describe("POST /api/chat", () => {
 
     it("asks which subject is meant, citing nothing and not answering, when Jev finds no name", async () => {
       const { chat, jev } = installStubModels();
-      jev.noul = 0.5;
+      jev.noul = 0.7;
       const app = await startServerWithUpload();
 
       const parts = await ask(app, Q3);
@@ -263,7 +288,7 @@ describe("POST /api/chat", () => {
 
     it("is answered as usual, with citations, when Jev finds a name", async () => {
       const { chat, jev } = installStubModels();
-      jev.noul = 0.49;
+      jev.noul = 0.69;
       chat.reply = "旅梯計畫的起點在台新。[1]";
       const app = await startServerWithUpload();
 
@@ -276,7 +301,7 @@ describe("POST /api/chat", () => {
 
     it("is retrieved while Jev is still checking it", async () => {
       const { embedded, jev } = installStubModels();
-      jev.noul = 0.49;
+      jev.noul = 0.69;
       jev.delayMs = 300;
       const app = await startServerWithUpload();
 
@@ -330,7 +355,7 @@ describe("POST /api/chat", () => {
 
     it("is checked even without a pointing word, and answered when Jev finds a name", async () => {
       const { chat, jev } = installStubModels();
-      jev.noul = 0.49;
+      jev.noul = 0.69;
       chat.reply = "旅梯計畫巡迴了 5 站。[1]";
       const app = await startServerWithUpload();
 
@@ -344,7 +369,7 @@ describe("POST /api/chat", () => {
 
     it("asks which subject is meant when one without a pointing word leaves it unnamed", async () => {
       const { chat, jev } = installStubModels();
-      jev.noul = 0.5;
+      jev.noul = 0.7;
       const app = await startServerWithUpload();
 
       const parts = await ask(app, "是哪幾年辦的？");
@@ -353,6 +378,41 @@ describe("POST /api/chat", () => {
       expect(textOf(parts)).toBe(CLARIFY);
       expect(parts.some((p) => p.type === "data-citation")).toBe(false);
       expect(chat.prompts).toHaveLength(0);
+    });
+
+    it("is not checked, and is answered, when it says to update something", async () => {
+      const { chat, jev } = installStubModels();
+      jev.noul = 0.9;
+      const app = await startServerWithUpload();
+
+      const parts = await ask(app, "補充一下，它每週四開會");
+
+      expect(jev.states).toHaveLength(0);
+      expect(textOf(parts)).not.toBe(CLARIFY);
+      expect(chat.prompts).toHaveLength(1);
+    });
+
+    it("is not checked when it attaches a file", async () => {
+      const { jev } = installStubModels();
+      jev.noul = 0.9;
+      const app = await startServerWithUpload();
+
+      const parts = await ask(
+        app,
+        Q3,
+        [],
+        [
+          {
+            type: "file",
+            mediaType: "text/plain",
+            filename: "meeting.txt",
+            url: "data:text/plain;base64,5pyD6K2w",
+          },
+        ],
+      );
+
+      expect(jev.states).toHaveLength(0);
+      expect(textOf(parts)).not.toBe(CLARIFY);
     });
 
     it("is not checked as a follow-up", async () => {
