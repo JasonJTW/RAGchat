@@ -401,3 +401,18 @@ export const excludedTerms = pgTable(
   },
   (t) => [unique("excluded_terms_term").on(t.workspaceId, t.term)],
 );
+
+/**
+ * 刪除紀錄: that a 來源 was hard-deleted, by whom and when. Its id is all it
+ * keeps of the source: no content, filename or anything drawn from it.
+ */
+export const deletions = pgTable("deletions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspaceId: workspaceId(),
+  /** The deleted source's id; it no longer refers to a row. */
+  sourceId: uuid("source_id").notNull(),
+  deletedBy: text("deleted_by").notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});

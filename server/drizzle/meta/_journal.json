@@ -71,6 +71,13 @@
       "when": 1794630990645,
       "tag": "0009_unique_shooting_star",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794631706863,
+      "tag": "0010_deletions",
+      "breakpoints": true
     }
   ]
 }

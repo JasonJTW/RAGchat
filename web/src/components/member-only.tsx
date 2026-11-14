@@ -2,14 +2,18 @@
 
 import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
-import { useEffect } from "react";
+import { createContext, useContext, useEffect } from "react";
 import useSWR from "swr";
 
 /** Who the server says is signed in (GET /api/me). */
-interface Me {
+export interface Me {
   userId: string;
   role: "member" | "guest";
 }
+
+/** Who is signed in, inside MemberOnly; null outside it. */
+export const MeContext = createContext<Me | null>(null);
+export const useMe = () => useContext(MeContext);
 
 async function fetchMe(url: string): Promise<Me | null> {
   const res = await fetch(url);
@@ -42,5 +46,5 @@ export function MemberOnly({ children }: { children: ReactNode }) {
     return (
       <p role="status">訪客試用尚未開放。目前只有大量交織團隊成員可以使用。</p>
     );
-  return children;
+  return <MeContext.Provider value={me}>{children}</MeContext.Provider>;
 }

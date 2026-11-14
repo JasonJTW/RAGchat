@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Proposal } from "@/lib/chat-message";
+import { MeContext } from "./member-only";
 import { ProposalCard } from "./proposal-card";
 
 type Item = Proposal["items"][number];
@@ -16,6 +17,7 @@ const item = (n: number, kind: Item["kind"] = "add"): Item => ({
 const proposalOf = (items: Item[]): Proposal => ({
   id: "p1",
   status: "pending",
+  sourceId: "s1",
   createdBy: "user_a",
   createdAt: "2026-11-14T00:00:00.000Z",
   items,
@@ -160,5 +162,63 @@ describe("entities", () => {
       relinks: unknown;
     };
     expect(body.relinks).toEqual([{ entityId: "e-model", to: "e-algorithm" }]);
+  });
+});
+
+describe("deleting its 來源", () => {
+  const signedInAs = (userId: string, proposal: Proposal) =>
+    render(
+      <MeContext.Provider value={{ userId, role: "member" }}>
+        <ProposalCard proposal={proposal} />
+      </MeContext.Provider>,
+    );
+
+  it("lets the uploader hard-delete the source, after saying what goes", async () => {
+    const fetch = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(
+      () => Promise.resolve(new Response(null, { status: 204 })),
+    );
+    vi.stubGlobal("fetch", fetch);
+    signedInAs("user_a", { ...proposalOf([item(1)]), status: "confirmed" });
+
+    fireEvent.click(screen.getByText("刪除來源"));
+    expect(screen.getByRole("group", { name: "刪除來源" })).toHaveTextContent(
+      "由它產生的事實",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "永久刪除" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("來源已刪除");
+    expect(fetch).toHaveBeenCalledWith("/api/sources/s1", { method: "DELETE" });
+    expect(screen.queryByText("事實 1")).not.toBeInTheDocument();
+  });
+
+  it("is not offered to anyone else", () => {
+    signedInAs("user_b", proposalOf([item(1)]));
+
+    expect(screen.queryByText("刪除來源")).not.toBeInTheDocument();
+  });
+
+  it("says why when the server refuses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          Response.json(
+            { error: "only its uploader may delete a source" },
+            {
+              status: 403,
+            },
+          ),
+        ),
+      ),
+    );
+    signedInAs("user_a", proposalOf([item(1)]));
+
+    fireEvent.click(screen.getByText("刪除來源"));
+    fireEvent.click(screen.getByRole("button", { name: "永久刪除" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "only its uploader may delete a source",
+    );
+    expect(screen.getByText("事實 1")).toBeInTheDocument();
   });
 });

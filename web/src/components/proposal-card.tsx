@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { useMe } from "@/components/member-only";
 import { TermMarker } from "@/components/term-marker";
 import type { Conflict, Proposal, ProposalEntity } from "@/lib/chat-message";
 import { teamDate } from "@/lib/team-date";
@@ -42,8 +43,104 @@ type Item = Proposal["items"][number];
  *
  * While pending, a folded 標記敏感詞 lets the member mark a term sensitive
  * or not for later input (TermMarker).
+ *
+ * Its uploader gets a folded 刪除來源 (SourceDeleter): once the source is
+ * hard-deleted, the card shows only that.
  */
 export function ProposalCard({ proposal }: { proposal: Proposal }) {
+  const me = useMe();
+  const [deleted, setDeleted] = useState(false);
+  if (deleted)
+    return (
+      <section
+        aria-label="提案"
+        className="mt-2 rounded-md border bg-zinc-50 p-3"
+      >
+        <p role="status" className="text-sm text-zinc-600">
+          來源已刪除：它與由它產生的事實都已從知識庫移除。
+        </p>
+      </section>
+    );
+  return (
+    <LiveCard
+      proposal={proposal}
+      deleter={
+        proposal.sourceId && me?.userId === proposal.createdBy ? (
+          <SourceDeleter
+            sourceId={proposal.sourceId}
+            onDeleted={() => setDeleted(true)}
+          />
+        ) : null
+      }
+    />
+  );
+}
+
+/**
+ * The uploader's folded 刪除來源: says what goes, then hard-deletes the
+ * source (DELETE /api/sources/{id}).
+ */
+function SourceDeleter({
+  sourceId,
+  onDeleted,
+}: {
+  sourceId: string;
+  onDeleted: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  return (
+    <details className="mt-2 text-sm">
+      <summary className="cursor-pointer text-zinc-600">刪除來源</summary>
+      <div role="group" aria-label="刪除來源" className="mt-1 space-y-2">
+        <p className="text-zinc-600">
+          永久刪除這個來源，以及由它產生的事實、段落與提案；它做過的取代與過時會還原。只會留下一筆刪除紀錄，無法復原。
+        </p>
+        <Button
+          type="button"
+          variant="destructive"
+          size="sm"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            setError("");
+            try {
+              const res = await fetch(`/api/sources/${sourceId}`, {
+                method: "DELETE",
+              });
+              if (!res.ok) {
+                const body = (await res.json().catch(() => ({}))) as {
+                  error?: string;
+                };
+                throw new Error(body.error ?? res.statusText);
+              }
+              onDeleted();
+            } catch (e) {
+              setError(`沒有成功：${(e as Error).message}`);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          永久刪除
+        </Button>
+        {error && (
+          <p role="alert" className="text-red-600">
+            {error}
+          </p>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function LiveCard({
+  proposal,
+  deleter,
+}: {
+  proposal: Proposal;
+  deleter: React.ReactNode;
+}) {
   const [decided, setDecided] = useState<Proposal>(proposal);
   const [texts, setTexts] = useState<Record<string, string>>({});
   const [unticked, setUnticked] = useState<Set<string>>(new Set());
@@ -288,6 +385,7 @@ export function ProposalCard({ proposal }: { proposal: Proposal }) {
           {error}
         </p>
       )}
+      {deleter}
     </section>
   );
 }

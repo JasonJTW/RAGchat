@@ -549,6 +549,47 @@ paths:
                 $ref: "#/components/schemas/Error"
         "503":
           $ref: "#/components/responses/DeidentificationUnavailable"
+  /api/sources/{id}:
+    delete:
+      operationId: deleteSource
+      summary: Hard-delete a 來源 and everything drawn from it (its uploader only)
+      description: >
+        The one exception to 來源 being immutable. In one transaction: the
+        source, its passages, facts (with their embeddings, entity links,
+        aliases and edges) and proposals are deleted; entities no live fact
+        links to any more, and pseudonyms no other row uses, go too. What its
+        proposals did is taken back: a fact it replaced (取代) or marked 過時
+        is current again (or, when its replacement was replaced since, is
+        followed by that newer version), pending items its confirmation
+        expired can be confirmed again, and other members' pending changes to
+        its facts are dropped. Proposal cards and citations of it leave saved
+        conversations. Only a record that a deletion happened stays: who,
+        when, and the source's id, with no content.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >
+            Not a member, or not the source's uploader (nothing was deleted)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No such source in the caller's workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/terms:
     get:
       operationId: listTerms
@@ -820,11 +861,17 @@ components:
       description: >
         A 提案: changes to the knowledge base waiting for a member. While
         `pending`, its facts are not in the knowledge base.
-      required: [id, status, createdBy, createdAt, items, entities]
+      required: [id, status, sourceId, createdBy, createdAt, items, entities]
       properties:
         id:
           type: string
           format: uuid
+        sourceId:
+          type: string
+          format: uuid
+          description: >
+            The 來源 it was proposed from; its uploader (`createdBy`) may
+            hard-delete it (`DELETE /api/sources/{id}`)
         status:
           type: string
           enum: [pending, confirmed, rejected, expired]

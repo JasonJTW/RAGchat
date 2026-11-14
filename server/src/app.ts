@@ -17,6 +17,7 @@ import {
 import {
   confirmProposal,
   type DecisionError,
+  deleteSource,
   pendingProposals,
   type Proposal,
   rejectProposal,
@@ -294,6 +295,22 @@ app.post("/api/sources", upload.array("files"), async (req, res) => {
     return;
   }
   res.status(201).json({ proposals, skipped });
+});
+
+// 硬刪除: only the source's uploader may; anyone else gets a 403, and a
+// source of another workspace does not exist.
+app.delete("/api/sources/:id", async (req, res) => {
+  const id = z.uuid().safeParse(req.params.id);
+  if (!id.success) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  const { workspaceId, userId } = callerIn(res);
+  const result = await deleteSource(workspaceId, id.data, userId);
+  if (result === "not found") res.status(404).json({ error: result });
+  else if (result === "not yours")
+    res.status(403).json({ error: "only its uploader may delete a source" });
+  else res.status(204).end();
 });
 
 const REFUSAL_STATUS = {

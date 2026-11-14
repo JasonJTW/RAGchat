@@ -9,8 +9,10 @@ import {
   type SQL,
 } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
+import { forgetParts } from "./conversations.js";
 import { db } from "./db.js";
 import {
+  deletions,
   facts,
   proposalItems,
   proposals,
@@ -31,6 +33,7 @@ import {
   type Relink,
 } from "./entities.js";
 import { embeddings } from "./models.js";
+import { forgetUnused } from "./pseudonyms.js";
 
 export type { Mention, ProposalEntity, Relation, Relink };
 
@@ -92,6 +95,8 @@ export interface Proposal {
   id: string;
   /** 已過期 (expired) once a newer proposal's confirmation expired every item. */
   status: "pending" | "confirmed" | "rejected" | "expired";
+  /** The 來源 it was proposed from; its uploader may hard-delete it. */
+  sourceId: string;
   createdBy: string;
   createdAt: string;
   /** The member who confirmed or rejected it; absent while pending. */
@@ -883,6 +888,158 @@ async function expireOlder(
     );
 }
 
+/** Why a source could not be deleted: absent, or someone else's input. */
+export type DeletionError = "not found" | "not yours";
+
+/**
+ * Hard-deletes a source (硬刪除), the one exception to sources being
+ * immutable: its passages, facts, proposals and what was drawn from them go,
+ * and a record that it was deleted (who, when, its id) stays. Only its
+ * uploader may. All or nothing, in one transaction, one decision at a time
+ * with confirmations.
+ */
+export async function deleteSource(
+  workspaceId: string,
+  sourceId: string,
+  userId: string,
+): Promise<"deleted" | DeletionError> {
+  if (!isUuid(sourceId)) return "not found";
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext('decide'), hashtext(${workspaceId}))`,
+    );
+    const [source] = await tx
+      .select({ createdBy: sources.createdBy })
+      .from(sources)
+      .where(
+        and(eq(sources.id, sourceId), eq(sources.workspaceId, workspaceId)),
+      )
+      .for("update");
+    if (!source) return "not found";
+    if (source.createdBy !== userId) return "not yours";
+    // Every text that may hold a pseudonym only it used.
+    const { rows: texts } = await tx.execute<{ text: string }>(sql`
+      select content as text from sources where id = ${sourceId}
+      union all
+      select concat_ws(' ', content, original_content) from facts
+      where source_id = ${sourceId}
+      union all
+      select i.reason from proposal_items i join proposals p on p.id = i.proposal_id
+      where p.source_id = ${sourceId} and i.reason is not null
+    `);
+    const { rows: drawn } = await tx.execute<{ id: string }>(sql`
+      select id from facts where source_id = ${sourceId}
+      union all select id from source_chunks where source_id = ${sourceId}
+      union all select id from proposals where source_id = ${sourceId}
+    `);
+    await forgetParts(
+      tx,
+      workspaceId,
+      drawn.map((row) => row.id),
+    );
+    await undoSource(tx, workspaceId, sourceId);
+    await tx.delete(sources).where(eq(sources.id, sourceId));
+    await pruneEntities(tx, workspaceId);
+    await forgetUnused(
+      tx,
+      workspaceId,
+      texts.map((row) => row.text),
+    );
+    await tx
+      .insert(deletions)
+      .values({ workspaceId, sourceId, deletedBy: userId });
+    return "deleted";
+  });
+}
+
+// Takes back what the source's facts and proposals did to the rest of the
+// knowledge base, as if it had never been input. Its rows go afterwards (by
+// cascade from the source).
+async function undoSource(tx: Tx, workspaceId: string, sourceId: string) {
+  const doomed = sql`(select id from facts where source_id = ${sourceId})`;
+  const doomedProposals = sql`(select id from proposals where source_id = ${sourceId})`;
+  // A fact one of its facts replaced: current again when that replacement
+  // still is; otherwise it is followed directly by the fact that replaced
+  // the replacement, skipping the deleted version in its history. (Not when
+  // it had ended before, as 過時: a replacement then only follows it.)
+  await tx.execute(sql`
+    update facts t set
+      valid_to = case when r.superseded_by is null and r.valid_to is null then null else t.valid_to end,
+      superseded_by = r.superseded_by
+    from facts r
+    where t.workspace_id = ${workspaceId} and r.id = t.superseded_by
+      and r.id in ${doomed} and t.id not in ${doomed}
+      and t.valid_to = r.valid_from
+  `);
+  // Other proposals' changes to its facts now change the fact the deleted
+  // version replaced, if any.
+  await tx.execute(sql`
+    update proposal_items i set target_fact_id = t.id
+    from facts t
+    where i.workspace_id = ${workspaceId} and i.target_fact_id in ${doomed}
+      and t.superseded_by is null and t.id not in ${doomed}
+      and exists (
+        select 1 from proposal_items own
+        where own.proposal_id in ${doomedProposals} and own.kind = 'supersede'
+          and own.fact_id = i.target_fact_id and own.target_fact_id = t.id
+      )
+  `);
+  // A fact its proposals marked 過時 is current again.
+  await tx.execute(sql`
+    update facts t set valid_to = null
+    from proposal_items i join proposals p on p.id = i.proposal_id
+    where p.source_id = ${sourceId} and p.status = 'confirmed'
+      and i.kind = 'obsolete' and not i.excluded and i.expired_by is null
+      and t.id = i.target_fact_id and t.superseded_by is null
+      and t.valid_to = i.effective_at
+  `);
+  // Pending changes left with nothing to change go, and so do pending
+  // proposals left with no item.
+  const dropped = await tx.execute<{ proposal_id: string }>(sql`
+    delete from facts f using proposal_items i, proposals p
+    where i.target_fact_id in ${doomed} and f.id = i.fact_id
+      and p.id = i.proposal_id and p.status = 'pending'
+      and p.source_id <> ${sourceId}
+    returning p.id as proposal_id
+  `);
+  const left = await tx.execute<{ proposal_id: string }>(sql`
+    delete from proposal_items i using proposals p
+    where i.target_fact_id in ${doomed} and p.id = i.proposal_id
+      and p.status = 'pending' and p.source_id <> ${sourceId}
+    returning i.proposal_id
+  `);
+  const touched = [
+    ...new Set([...dropped.rows, ...left.rows].map((r) => r.proposal_id)),
+  ];
+  if (touched.length)
+    await tx.execute(sql`
+      delete from proposals p
+      where p.id in (${sql.join(
+        touched.map((id) => sql`${id}::uuid`),
+        sql`, `,
+      )})
+        and not exists (select 1 from proposal_items i where i.proposal_id = p.id)
+    `);
+  // What its confirmation expired can be confirmed again.
+  await tx.execute(sql`
+    update facts f set status = 'pending'
+    from proposal_items i
+    where i.expired_by in ${doomedProposals} and f.id = i.fact_id
+      and f.status = 'expired'
+  `);
+  await tx.execute(sql`
+    update proposals p set status = 'pending', decided_at = null
+    where p.status = 'expired' and exists (
+      select 1 from proposal_items i
+      where i.proposal_id = p.id and i.expired_by in ${doomedProposals}
+    )
+  `);
+  await tx.execute(sql`
+    update proposal_items set expired_by = null
+    where expired_by in ${doomedProposals}
+  `);
+}
+
 /** The workspace's pending proposals, oldest first. */
 export async function pendingProposals(
   workspaceId: string,
@@ -924,6 +1081,7 @@ async function cardOf(
   return {
     id: row.id,
     status: row.status,
+    sourceId: row.sourceId,
     createdBy: row.createdBy,
     createdAt: row.createdAt.toISOString(),
     ...(row.decidedBy != null && { decidedBy: row.decidedBy }),
