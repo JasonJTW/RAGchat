@@ -378,6 +378,29 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Proposal"
+  /api/proposals/{id}:
+    get:
+      operationId: getProposal
+      summary: Read a proposal as it stands now
+      description: >
+        The proposal of the caller's workspace, whatever its status, as its
+        card shows it now (re-identified): what a card saved in a
+        conversation refreshes from when the conversation is reopened.
+      parameters:
+        - $ref: "#/components/parameters/ProposalId"
+      responses:
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NotAMember"
+        "200":
+          description: The proposal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Proposal"
+        "404":
+          $ref: "#/components/responses/ProposalNotFound"
   /api/proposals/{id}/confirm:
     post:
       operationId: confirmProposal

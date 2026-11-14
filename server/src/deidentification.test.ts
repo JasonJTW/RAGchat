@@ -172,6 +172,9 @@ describe("an input", () => {
     const listed = await request(app).get("/api/proposals");
     expect(JSON.stringify(listed.body)).toContain("王小明先生負責倉庫盤點");
     expect(JSON.stringify(listed.body)).not.toContain("〔");
+    const read = await request(app).get(`/api/proposals/${card.id}`);
+    expect(JSON.stringify(read.body)).toContain("王小明先生負責倉庫盤點");
+    expect(JSON.stringify(read.body)).not.toContain("〔");
   });
 
   it("of a file refused for its format saves no name from its filename in clear", async () => {

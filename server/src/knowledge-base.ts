@@ -1140,6 +1140,26 @@ async function undoSource(tx: Tx, workspaceId: string, sourceId: string) {
   `);
 }
 
+/** The workspace's proposal as its card shows it now; null when absent. */
+export async function proposalOf(
+  workspaceId: string,
+  proposalId: string,
+): Promise<Proposal | null> {
+  if (!isUuid(proposalId)) return null;
+  return db.transaction(async (tx) => {
+    const [row] = await tx
+      .select()
+      .from(proposals)
+      .where(
+        and(
+          eq(proposals.id, proposalId),
+          eq(proposals.workspaceId, workspaceId),
+        ),
+      );
+    return row ? cardOf(tx, workspaceId, row) : null;
+  });
+}
+
 /** The workspace's pending proposals, oldest first. */
 export async function pendingProposals(
   workspaceId: string,

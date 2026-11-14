@@ -6,6 +6,7 @@ import useSWR from "swr";
 import { Chat } from "@/components/chat";
 import { Button } from "@/components/ui/button";
 import type { ChatMessage } from "@/lib/chat-message";
+import { withCurrentProposals } from "@/lib/current-proposals";
 
 /** A saved conversation as listed (server/openapi.yaml's ConversationSummary). */
 interface ConversationSummary {
@@ -104,9 +105,13 @@ const hrefOf = (id: string) => `/?c=${encodeURIComponent(id)}`;
 
 /** A saved conversation, loaded from the server and continued in place. */
 function SavedChat({ id, onSaved }: { id: string; onSaved: () => void }) {
+  // Its proposal cards as they stand now, not as they were saved.
   const { data, error } = useSWR(
     `${LIST}/${encodeURIComponent(id)}`,
-    fetchJson<{ messages: ChatMessage[] }>,
+    async (url: string) => {
+      const saved = await fetchJson<{ messages: ChatMessage[] }>(url);
+      return { messages: await withCurrentProposals(saved.messages) };
+    },
     { revalidateOnFocus: false, revalidateIfStale: false },
   );
   if (error)

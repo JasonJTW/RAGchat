@@ -142,6 +142,37 @@ describe("GET /api/proposals", () => {
   });
 });
 
+describe("GET /api/proposals/{id}", () => {
+  it("reads a proposal as its card shows it now, decided or not", async () => {
+    const proposal = await proposeFacts("member-a", TAKEN);
+    as("member-b");
+    await confirm(proposal.id);
+
+    const res = await request(app).get(`/api/proposals/${proposal.id}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      id: proposal.id,
+      status: "confirmed",
+      decidedBy: "member-b",
+      items: [{ content: TAKEN, status: "confirmed" }],
+    });
+  });
+
+  it("finds no proposal of another workspace, nor one with a malformed id", async () => {
+    const proposal = await proposeFacts("member-a", TAKEN);
+    workspaceId = await createWorkspace("guest", "other");
+    as("member-a");
+
+    expect(
+      (await request(app).get(`/api/proposals/${proposal.id}`)).status,
+    ).toBe(404);
+    expect((await request(app).get("/api/proposals/not-an-id")).status).toBe(
+      404,
+    );
+  });
+});
+
 describe("confirming after the knowledge base changed", () => {
   beforeEach(() => {
     // TAKEN and RECYCLED make the same claim (what R stands for);

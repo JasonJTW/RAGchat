@@ -22,6 +22,7 @@ import {
   type DecisionError,
   deleteSource,
   pendingProposals,
+  proposalOf,
   type Proposal,
   rejectProposal,
   type Stopped,
@@ -323,6 +324,16 @@ const confirmBody = z
 
 // Confirming is the one way facts enter the knowledge base; no model is
 // involved (ADR-0003).
+// A proposal as it stands now, e.g. for a card in a reopened conversation.
+app.get("/api/proposals/:id", async (req, res) => {
+  const proposal = await proposalOf(callerIn(res).workspaceId, req.params.id);
+  if (!proposal) {
+    res.status(404).json({ error: "proposal not found" });
+    return;
+  }
+  res.json(proposal);
+});
+
 app.post("/api/proposals/:id/confirm", async (req, res) => {
   const body = confirmBody.safeParse(req.body);
   if (!body.success) {
