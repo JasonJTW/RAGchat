@@ -302,6 +302,13 @@ export async function propose(
   ];
   const vectors = texts.length ? await model.embedDocuments(texts) : [];
   return db.transaction(async (tx) => {
+    // Waits for a decision in progress to commit, so the proposal is made
+    // either before it (and re-checked against it at confirm) or after it,
+    // having seen it; `created_at` and `decided_at` both come from the
+    // database's clock, taken under that lock.
+    await tx.execute(
+      sql`select pg_advisory_xact_lock_shared(hashtext('decide'), hashtext(${workspaceId}))`,
+    );
     const targetIds = corrections.map((c) => c.targetFactId);
     if (
       (await currentFacts(workspaceId, targetIds, tx)).length !==
@@ -374,7 +381,12 @@ export async function propose(
     );
     const [proposal] = await tx
       .insert(proposals)
-      .values({ workspaceId, sourceId: source.id, createdBy: userId })
+      .values({
+        workspaceId,
+        sourceId: source.id,
+        createdBy: userId,
+        createdAt: sql`clock_timestamp()`,
+      })
       .returning();
     let next = 0;
     const items = [
@@ -626,7 +638,9 @@ async function decide(
           })
           .where(eq(facts.id, item.factId!));
       }
-      const now = new Date();
+      // The database's clock, as for a proposal's `created_at`: the re-check
+      // compares the two.
+      const now = await clockOf(tx);
       const changes = ticked.filter((item) => item.target);
       if (
         status === "confirmed" &&
@@ -677,6 +691,14 @@ async function decide(
     if (error instanceof InvalidError) return "invalid edit";
     throw error;
   }
+}
+
+// The database's time now, past any lock the transaction holds.
+async function clockOf(tx: Tx): Promise<Date> {
+  const { rows } = await tx.execute<{ now: Date | string }>(
+    sql`select clock_timestamp() as now`,
+  );
+  return new Date(rows[0].now);
 }
 
 /**

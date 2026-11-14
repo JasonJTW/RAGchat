@@ -1,5 +1,5 @@
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type Proposal, propose, searchFacts } from "./knowledge-base.js";
 import { installStubModels } from "./stub-models.js";
 import { createWorkspace, type Caller } from "./workspaces.js";
@@ -203,6 +203,40 @@ describe("confirming after the knowledge base changed", () => {
       ],
     });
     expect(await current()).toEqual([RECYCLED]);
+  });
+
+  describe("with the server's clock off from the database's", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("is not stopped by a change confirmed before it was made (server clock ahead)", async () => {
+      vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 3_600_000 });
+      const taken = await confirmed(TAKEN);
+      const replace = await proposeCorrection("member-a", taken, {
+        content: RECYCLED,
+      });
+      expect((await confirm(replace.id)).status).toBe(200);
+      const note = await proposeFacts("member-b", BY_WEIGHT);
+
+      const res = await confirm(note.id);
+
+      expect(res.status).toBe(200);
+    });
+
+    it("is stopped by a change confirmed after it was made (server clock behind)", async () => {
+      vi.useFakeTimers({ toFake: ["Date"], now: Date.now() - 3_600_000 });
+      const taken = await confirmed(TAKEN);
+      const note = await proposeFacts("member-b", BY_WEIGHT);
+      const replace = await proposeCorrection("member-a", taken, {
+        content: RECYCLED,
+      });
+      await confirm(replace.id);
+
+      const res = await confirm(note.id);
+
+      expect(res.status).toBe(409);
+    });
   });
 
   it("goes through when what changed since is about something else", async () => {
