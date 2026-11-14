@@ -5,7 +5,7 @@ export interface Citation {
   id: string;
   /** The `[n]` the answer marks it with. */
   marker: number;
-  /** A 事實 (confirmed, or 待確認 with `proposal`), or a passage of a document. */
+  /** A 事實 (confirmed, or 待確認 with `proposal`), or a passage of a file 來源. */
   kind: "fact" | "passage";
   /** e.g. "知識庫 · 2026-11-14", "待確認 · 2026-11-14", or "05-projects-and-practice.md › 05 實踐案例 … › C. 移動微型空間計畫" */
   label: string;
@@ -13,8 +13,11 @@ export interface Citation {
   text: string;
   /** Present when a 成員 edited the fact's text on its 提案 card. */
   edited?: Edited;
-  /** A fact's 來源 as it was given, shown when expanded. */
-  source?: { content: string; createdAt: string };
+  /**
+   * A fact's 來源 as it was given, shown when expanded: the message, or the
+   * passage of the file it came from, labelled with that passage's path.
+   */
+  source?: { content: string; createdAt: string; label?: string };
   /** A fact's versions, oldest first, ending with it; when it replaced one. */
   history?: HistoryEntry[];
   /** Present when the fact is 待確認: the 提案 it belongs to, to confirm here. */
@@ -52,6 +55,11 @@ export interface Proposal {
     /** The fact it adds (新增, 取代); absent for 過時. */
     factId?: string;
     content?: string;
+    /**
+     * 待確認 while the proposal is; once decided, whether the item took
+     * effect (`rejected` when the proposal was rejected or it was unticked).
+     */
+    status: "pending" | "confirmed" | "rejected" | "expired";
     edited?: Edited;
     /** The fact it replaces or marks 過時 (取代, 過時). */
     target?: { factId: string; content: string; validFrom: string };

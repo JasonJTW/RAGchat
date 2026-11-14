@@ -1,5 +1,4 @@
 import { expect, test } from "@playwright/test";
-import { openDocuments, removeAllDocuments } from "./documents";
 import { askFollowUp, send } from "./ask";
 
 const FACT =
@@ -7,9 +6,6 @@ const FACT =
 const INPUT = `請把以下內容輸入到知識庫：${FACT}`;
 
 test.beforeEach(async ({ page }) => {
-  // Only the knowledge base answers: earlier tests' documents are removed.
-  await openDocuments(page);
-  await removeAllDocuments(page);
   await page.goto("/");
 });
 

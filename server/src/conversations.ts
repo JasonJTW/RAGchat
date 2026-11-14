@@ -79,14 +79,19 @@ export async function mayContinue(caller: Caller, id: string) {
 
 /**
  * Saves the conversation's messages, starting it if new; its title is the
- * first user message. Returns false, saving nothing, when it is someone
- * else's.
+ * first user message. An attached file is kept as its name and type only:
+ * its contents became a 來源 when it was sent, and are never stored here.
+ * Returns false, saving nothing, when it is someone else's.
  */
 export async function saveConversation(
   caller: Caller,
   id: string,
-  messages: { role: string; parts: { type: string; text?: string }[] }[],
+  sent: { role: string; parts: { type: string; text?: string }[] }[],
 ): Promise<boolean> {
+  const messages = sent.map((message) => ({
+    ...message,
+    parts: message.parts.map(withoutFileData),
+  }));
   const saved = await db
     .insert(conversations)
     .values({
@@ -121,4 +126,14 @@ function titleOf(
     .replace(/\s+/g, " ")
     .trim();
   return [...text].slice(0, TITLE_LENGTH).join("") || "新對話";
+}
+
+// A `file` part without its data URL: what the chat shows of it.
+function withoutFileData<P extends { type: string }>(part: P) {
+  if (part.type !== "file") return part;
+  const { filename, mediaType } = part as P & {
+    filename?: string;
+    mediaType?: string;
+  };
+  return { type: "file", filename, mediaType };
 }

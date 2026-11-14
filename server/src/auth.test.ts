@@ -13,13 +13,10 @@ const knowledgeBaseCalls = {
   chat: () => request(app).post("/api/chat").send({ messages: [] }),
   confirm: () => request(app).post(`/api/proposals/${ID}/confirm`),
   reject: () => request(app).post(`/api/proposals/${ID}/reject`),
-  "list documents": () => request(app).get("/api/documents"),
   upload: () =>
     request(app)
-      .post("/api/documents")
+      .post("/api/sources")
       .attach("files", Buffer.from("內容"), "faq.txt"),
-  "delete document": () => request(app).delete("/api/documents/x"),
-  chunks: () => request(app).get("/api/documents/x/chunks"),
 };
 
 describe("a caller who is not signed in", () => {
@@ -74,9 +71,21 @@ describe("a 成員", () => {
       .post(`/api/proposals/${ID}/confirm`)
       .set("Cookie", member);
     expect(unknown.status).toBe(404);
+    // No file: refused before anything reaches the team workspace.
     expect(
-      (await request(app).get("/api/documents").set("Cookie", member)).status,
-    ).toBe(200);
+      (await request(app).post("/api/sources").set("Cookie", member)).status,
+    ).toBe(400);
+  });
+});
+
+describe("the old document store", () => {
+  it("is gone", async () => {
+    for (const call of [
+      request(app).get("/api/documents"),
+      request(app).delete("/api/documents/x"),
+      request(app).get("/api/documents/x/chunks"),
+    ])
+      expect((await call.set("Cookie", member)).status).toBe(404);
   });
 });
 

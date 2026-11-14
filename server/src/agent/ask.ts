@@ -5,13 +5,13 @@ import {
   SystemMessage,
 } from "@langchain/core/messages";
 import { noul } from "@typesafe-ai/sdk";
-import { retrieve as retrievePassages } from "../documents.js";
 import {
   type Edited,
   type Fact,
   type HistoryEntry,
   type PendingFactMatch,
   type Proposal,
+  searchChunks,
   searchFacts,
   searchPendingFacts,
 } from "../knowledge-base.js";
@@ -20,7 +20,7 @@ import { type NodeConfig, type State, type Turn, writeText } from "./state.js";
 
 // The 提問 branch: [Jev 檢查] and [檢索] side by side, then [回答＋引用].
 
-/** Something an answer may draw on: a fact or a document passage. */
+/** Something an answer may draw on: a fact or a passage of a file source. */
 export interface Evidence {
   id: string;
   kind: "fact" | "passage";
@@ -30,8 +30,11 @@ export interface Evidence {
   text: string;
   /** Present when a member edited the fact's text inline (經編輯). */
   edited?: Edited;
-  /** A fact's source as given, shown when its citation is expanded. */
-  source?: { content: string; createdAt: string };
+  /**
+   * A fact's source as given, shown when its citation is expanded: the
+   * message, or the passage of a file it came from, with that passage's label.
+   */
+  source?: { content: string; createdAt: string; label?: string };
   /** A fact's history chain, oldest first, when it replaced another. */
   history?: HistoryEntry[];
   /**
@@ -49,7 +52,10 @@ export interface Citation extends Evidence {
   marker: number;
 }
 
-const EVIDENCE_PER_ANSWER = 6;
+// An answer draws on the best facts, and on the best passages of file
+// sources for the context facts leave out (e.g. a decision's reasoning).
+const FACTS_PER_ANSWER = 6;
+const PASSAGES_PER_ANSWER = 2;
 /** How many 待確認 facts an answer may draw on besides. */
 const PENDING_PER_ANSWER = 3;
 
@@ -151,11 +157,12 @@ export async function checkSubject(
 }
 
 /**
- * 檢索: the workspace's current confirmed facts and the stored document
- * passages that best match the question, merged best first, then the 待確認
- * facts that match well enough. A 待確認 fact that would replace a confirmed
- * one goes right after it, the confirmed one brought in if missing. A
- * follow-up is first rewritten into a standalone question.
+ * 檢索: the workspace's current confirmed facts (at most 6) and the passages
+ * of its confirmed file sources (at most 2) that best match the question,
+ * merged best first, then the 待確認 facts (at most 3) that match well
+ * enough. A 待確認 fact that would replace a confirmed one goes right after
+ * it, the confirmed one brought in if missing. A follow-up is first
+ * rewritten into a standalone question.
  */
 export async function retrieve(
   state: Pick<State, "workspaceId" | "turns" | "message">,
@@ -163,10 +170,10 @@ export async function retrieve(
   const query = state.turns.length
     ? await standaloneQuestion(state.turns, state.message)
     : state.message;
-  const [facts, pending, { passages }] = await Promise.all([
-    searchFacts(state.workspaceId, query, EVIDENCE_PER_ANSWER),
+  const [facts, pending, passages] = await Promise.all([
+    searchFacts(state.workspaceId, query, FACTS_PER_ANSWER),
     searchPendingFacts(state.workspaceId, query, PENDING_PER_ANSWER),
-    retrievePassages(query, EVIDENCE_PER_ANSWER),
+    searchChunks(state.workspaceId, query, PASSAGES_PER_ANSWER),
   ]);
   const scored: { similarity: number; evidence: Evidence }[] = facts.map(
     (fact) => ({
@@ -181,12 +188,13 @@ export async function retrieve(
         source: {
           content: fact.source.content,
           createdAt: fact.source.createdAt,
+          ...(fact.source.label && { label: fact.source.label }),
         },
       },
     }),
   );
-  // Passages keep their hybrid-search order; each fact goes before the first
-  // passage it matches better than.
+  // Passages keep their fused (vector + keyword) order; each fact goes
+  // before the first passage it matches better than.
   const merged: typeof scored = [];
   let f = 0;
   for (const passage of passages) {
@@ -197,15 +205,13 @@ export async function retrieve(
       evidence: {
         id: passage.id,
         kind: "passage",
-        label: passage.label,
-        text: passage.text,
+        label: passage.path.join(" › "),
+        text: passage.content,
       },
     });
   }
   merged.push(...scored.slice(f));
-  const evidence = merged
-    .slice(0, EVIDENCE_PER_ANSWER)
-    .map(({ evidence }) => evidence);
+  const evidence = merged.map(({ evidence }) => evidence);
   const relevant = pending.filter((fact) => fact.similarity >= MIN_SIMILARITY);
   for (const fact of relevant) withPending(evidence, fact);
   return {
@@ -227,7 +233,11 @@ function withPending(evidence: Evidence[], fact: PendingFactMatch) {
     label: `待確認 · ${TEAM_DATE.format(new Date(fact.validFrom))}`,
     text: fact.content,
     ...(fact.edited && { edited: fact.edited }),
-    source: { content: fact.source.content, createdAt: fact.source.createdAt },
+    source: {
+      content: fact.source.content,
+      createdAt: fact.source.createdAt,
+      ...(fact.source.label && { label: fact.source.label }),
+    },
     proposal: fact.proposal,
     ...(fact.replaces && { replaces: fact.replaces.id }),
   };

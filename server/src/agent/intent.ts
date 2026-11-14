@@ -1,12 +1,13 @@
 import type { Intent, State } from "./state.js";
 
-// 判斷意圖. For now rules: a message that opens with an instruction to
-// record what follows (「請把以下內容輸入到知識庫：…」「記下：…」) is input;
-// a statement that something is not so, was changed, or no longer applies
-// (「R 不是取代率，是回收率」「…已經過時了」) is a correction; anything else
-// a question. A message ending in a question mark asks, so 「R 改成什麼了？」
-// is a question; when the sentences before that question correct
-// (「R 已經改成回收率了，那現在 A 怎麼算？」), it does both.
+// 判斷意圖. For now rules: a message that attaches files, or opens with an
+// instruction to record what follows (「請把以下內容輸入到知識庫：…」
+// 「記下：…」), is input; a statement that something is not so, was
+// changed, or no longer applies (「R 不是取代率，是回收率」「…已經過時了」)
+// is a correction; anything else a question. A message ending in a question
+// mark asks, so 「R 改成什麼了？」 is a question; when the sentences before
+// that question correct (「R 已經改成回收率了，那現在 A 怎麼算？」), it does
+// both.
 
 const INPUT_INSTRUCTION =
   /^\s*請?(?:幫我)?(?:把|將)?(?:以下|下面|下列)?的?(?:內容|資訊|事實)?(?:輸入|記下|記錄|記住|寫入|加入|新增|存入)(?:到|進|至)?(?:知識庫)?(?:中|裡)?\s*[:：]/;
@@ -25,10 +26,11 @@ const ASKING = /什麼|甚麼|嗎|呢|哪|誰|如何|怎麼|怎樣|多少|幾|�
  * that does (the whole message, or what comes before its question).
  */
 export function classifyIntent(
-  state: Pick<State, "message">,
+  state: Pick<State, "message"> & Partial<Pick<State, "attachments">>,
 ): Pick<State, "intents"> & Partial<Pick<State, "correction">> {
   const { message } = state;
-  if (INPUT_INSTRUCTION.test(message)) return { intents: ["input"] };
+  if (state.attachments || INPUT_INSTRUCTION.test(message))
+    return { intents: ["input"] };
   const question = QUESTION.exec(message);
   if (!question)
     return CORRECTION.test(message)

@@ -30,7 +30,6 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <header className="mx-auto flex w-full max-w-3xl items-center justify-end gap-4 px-4 pt-4 text-sm">
             <Link href="/">對話</Link>
             <Link href="/proposals">待確認</Link>
-            <Link href="/documents">文件</Link>
             <AccountMenu />
           </header>
           {children}

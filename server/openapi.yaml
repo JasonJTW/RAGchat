@@ -46,13 +46,24 @@ paths:
       summary: Answer a question, or propose the facts of an input or a correction
       description: >
         The latest user message is input, a correction or a question. A message that
-        opens with an instruction to record what follows (e.g.
-        「請把以下內容輸入到知識庫：…」, 「記下：…」) is input: it is stored as
-        a 來源, its atomic facts are extracted by the extract model, and the
-        reply is a short text and a `data-proposal` part whose `data` is the
-        pending Proposal. Nothing enters the knowledge base until a member
-        confirms the proposal with `POST /api/proposals/{id}/confirm`; no
-        reply of the chat writes to it.
+        attaches files (`file` parts), or opens with an instruction to record
+        what follows (e.g. 「請把以下內容輸入到知識庫：…」, 「記下：…」), is
+        input, run through the input subgraph that `POST /api/sources` also
+        uses. Each attached file (.md, .txt, .pdf, .docx; at most 10, 5 MB
+        each) becomes a 來源 with its passages (split by heading, page, Q/A
+        pair or paragraph, 800 tokens at most), and the message's text only a
+        note to the extraction; a message without files is itself the 來源.
+        The extract model draws atomic facts from each passage (or the
+        message), told that the content is data, never instructions. The
+        reply has, per 來源, a short text and a `data-proposal` part whose
+        `data` is the pending Proposal. A file of another format refuses the
+        whole message: the reply is the text 「不支援的檔案格式：<names>…」
+        and nothing is stored; so is a file over 5 MB or an input of over 100
+        passages. A file without text (e.g. a scanned PDF) is answered
+        「<name>：無法抽出文字…」 with no proposal. Nothing enters the
+        knowledge base until a member confirms a proposal with
+        `POST /api/proposals/{id}/confirm`; no reply of the chat writes to
+        it, whatever the files say.
 
         A message that says something is not so, was changed, or no longer
         applies (e.g. 「R 不是取代率，是回收率」, 「…改成…」, 「…已經過時了」,
@@ -82,21 +93,23 @@ paths:
         「R 改成什麼了？」 is only a question.
 
         Any other message is a question, answered from the workspace's
-        current confirmed facts (vector search) and the uploaded documents'
-        passages, merged by cosine similarity (at most 6 in all), then up to
-        3 待確認 facts (of live items of pending proposals) with cosine
-        ≥ 0.3. A 待確認 fact that would replace a confirmed one comes right
-        after it (the confirmed one added if missing), and the two are cited
-        together, the confirmed one first; a 待確認 citation carries its
-        `proposal` so it can be confirmed from the answer.
-        Passages are the 6 that best match the question (embedding cosine and
-        BM25, merged by reciprocal rank fusion).
+        current confirmed facts (the 6 nearest by embedding cosine) and the
+        passages of its file 來源 with a confirmed proposal (the 2 best by
+        embedding cosine and pg_trgm keyword similarity, merged by reciprocal
+        rank fusion), merged by cosine similarity. A pending or rejected
+        file's passages are never answered from. Then up to 3 待確認 facts
+        (of live items of pending proposals) with cosine ≥ 0.3 follow. A
+        待確認 fact that would replace a confirmed one comes right after it
+        (the confirmed one added if missing), and the two are cited together,
+        the confirmed one first; a 待確認 citation carries its `proposal` so
+        it can be confirmed from the answer.
         When earlier messages are sent, the latest one is first rewritten
         into a standalone question for retrieval, and the answer sees the
         whole conversation. The client sends the whole conversation each
         time; with an `id`, the messages and the reply are saved as the
         caller's conversation (see /api/conversations) before the stream
-        ends, also when the client leaves mid-reply.
+        ends, also when the client leaves mid-reply; an attached file is
+        saved as its `filename` and `mediaType` only, never its data.
         When the latest message is the only one, Jev (TypeSafe) is asked,
         within 1.5 s and while retrieval runs alongside, whether it points at
         a subject it never names. If it does, the reply is the fixed sentence
@@ -106,9 +119,9 @@ paths:
         also corrects, and one with an input keyword (輸入, 記下, 記錄, 記住, 寫入, 存入, 存進,
         新增, 加入, 更新, 補充, 更正, 修正, 改成, 改為).
         Streams the answer as an AI SDK UI message stream (Server-Sent Events).
-        After the text, each passage the answer marks with `[n]` arrives as a
-        `data-citation` part in the same stream, with `data` shaped like
-        Citation. Passages the answer doesn't mark are not sent.
+        After the text, each fact or passage the answer marks with `[n]`
+        arrives as a `data-citation` part in the same stream, with `data`
+        shaped like Citation. Evidence the answer doesn't mark is not sent.
         When no fact or stored chunk is similar enough to the question (best cosine
         similarity below 0.3), or the passages don't answer it, the answer is
         the fixed refusal 「知識庫裡沒有這件事的資料。如果你知道，可以直接告訴我，
@@ -150,9 +163,10 @@ paths:
                                 20000 in other messages
                         description: >
                           `text` parts are read as the message. A `file` part
-                          (AI SDK FilePart) in the latest user message marks
-                          it as carrying an attachment; its content is not
-                          read yet.
+                          (AI SDK FileUIPart: `filename`, and `url` a base64
+                          data URL) in the latest user message is an attached
+                          file to input; earlier messages' files are ignored,
+                          so a client may leave them out.
       responses:
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -166,8 +180,16 @@ paths:
                 type: string
         "400":
           description: >
-            `messages` is missing or malformed, has more than 50 messages, or
-            has a text over its length limit; or `id` is malformed
+            `messages` is missing or malformed, has more than 50 messages, has
+            a text over its length limit, or its latest message attaches more
+            than 10 files or a file whose `url` is not a base64 data URL; or
+            `id` is malformed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: The request body is over 20 MB
           content:
             application/json:
               schema:
@@ -246,6 +268,12 @@ paths:
         The only way facts enter the knowledge base. Each of the proposal's
         facts becomes confirmed, recorded now and confirmed by the caller.
         Of two calls deciding one proposal at once, only the first succeeds.
+        Items unticked on the card are sent as `excluded`: they take no
+        effect (their facts are rejected, their 取代/過時 targets left as
+        they are, and the item's `status` says `rejected`) and count in
+        neither the re-check against changes since nor the expiry of older
+        items; at least one live item must stay ticked, and an expired item
+        can't be excluded. A stopped (409) call unticks nothing.
         Items edited inline on the card are sent as `edits`: each such fact
         takes the edited text (trimmed), embedded anew, and keeps the text
         as extracted and the caller as its editor (`edited`). An edit whose
@@ -282,9 +310,16 @@ paths:
             schema:
               type: object
               properties:
+                excluded:
+                  type: array
+                  maxItems: 1000
+                  description: Items of this proposal to leave out (unticked)
+                  items:
+                    type: string
+                    format: uuid
                 edits:
                   type: array
-                  maxItems: 100
+                  maxItems: 1000
                   items:
                     type: object
                     required: [itemId, content]
@@ -320,8 +355,9 @@ paths:
                 $ref: "#/components/schemas/Proposal"
         "400":
           description: >
-            An edit names no item of this proposal, or its text is blank or
-            longer than 2000 characters; nothing is decided
+            An edit or an excluded id names no item of this proposal, an
+            edit's text is blank or longer than 2000 characters, or every
+            item is excluded; nothing is decided
           content:
             application/json:
               schema:
@@ -369,32 +405,19 @@ paths:
           $ref: "#/components/responses/ProposalNotFound"
         "409":
           $ref: "#/components/responses/ProposalDecided"
-  /api/documents:
-    get:
-      operationId: listDocuments
-      summary: List uploaded documents
-      responses:
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/NotAMember"
-        "200":
-          description: Documents, oldest first
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/DocumentSummary"
+  /api/sources:
     post:
-      operationId: uploadDocuments
-      summary: Upload one or more documents (at most 10 files, 5 MiB each)
+      operationId: uploadSources
+      summary: Input files as 來源, each proposing its facts (at most 10 files, 5 MiB each)
       description: >
-        Responds once every file is chunked, embedded, and saved. Markdown is
-        split by heading, PDF by page (a PDF without a text layer gets 0
-        chunks), txt by Q/A pair or paragraph; any other format refuses the
-        whole request (415). All or nothing:
-        if embedding or saving fails, none of the files are added.
+        The upload entry of the input subgraph the chat's attachments use
+        (see `POST /api/chat`): each file (.md, .txt, .pdf, .docx) becomes a
+        來源 with its passages and one pending Proposal of the facts the
+        extract model draws from it. Responds once every proposal is made.
+        Nothing enters the knowledge base until a member confirms a proposal;
+        whatever a file says, it can only be proposed. A file without text
+        (e.g. a scanned PDF) or without facts makes no proposal and is listed
+        in `skipped`. A refused request (415, 413) stores none of the files.
       requestBody:
         required: true
         content:
@@ -413,88 +436,51 @@ paths:
         "403":
           $ref: "#/components/responses/NotAMember"
         "201":
-          description: The documents that were added
+          description: The proposals made, one per file with facts
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/DocumentSummary"
+                type: object
+                required: [proposals, skipped]
+                properties:
+                  proposals:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Proposal"
+                  skipped:
+                    type: array
+                    description: Files that made no proposal, and why
+                    items:
+                      type: object
+                      required: [filename, reason]
+                      properties:
+                        filename:
+                          type: string
+                        reason:
+                          type: string
+                          enum: [無法抽出文字, 沒有可以記下的事實]
         "400":
-          description: More than 10 files in one request
+          description: No file, or more than 10 files in one request
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
         "413":
-          description: A file is larger than 5 MiB
+          description: >
+            A file is larger than 5 MiB, or the files have over 100 passages
+            in all
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
         "415":
-          description: A file is not .md, .pdf, or .txt; none of the files were added
+          description: >
+            A file is not .md, .txt, .pdf or .docx (the error starts
+            「不支援的檔案格式」); none of the files were stored
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-        "500":
-          description: Embedding or saving failed; none of the files were added
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-  /api/documents/{id}:
-    delete:
-      operationId: deleteDocument
-      summary: Delete a document with its chunks and embeddings
-      description: >
-        Responds once the removal is saved; answers stop citing the document
-        immediately, and it stays deleted across a restart.
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/NotAMember"
-        "204":
-          description: Deleted
-        "404":
-          description: No document has that id
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-  /api/documents/{id}/chunks:
-    get:
-      operationId: listDocumentChunks
-      summary: List a document's chunks, in document order
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/NotAMember"
-        "200":
-          description: The document's chunks
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/ChunkSummary"
-        "404":
-          description: No document has that id
 components:
   securitySchemes:
     clerkSession:
@@ -573,8 +559,10 @@ components:
               type: array
               description: >
                 AI SDK UIMessage objects, oldest first, as the chat showed
-                them (text, `data-citation` and `data-proposal` parts). A
-                proposal part is the card as it was proposed.
+                them (text, `file`, `data-citation` and `data-proposal`
+                parts). A `file` part has only `filename` and `mediaType`:
+                attachments' contents are not kept here. A proposal part is
+                the card as it was proposed.
               items:
                 type: object
     Error:
@@ -589,7 +577,8 @@ components:
       properties:
         id:
           type: string
-          description: The fact's id, or `<document id>:<chunk index>`
+          format: uuid
+          description: The fact's id, or the passage's (a 來源 chunk)
         marker:
           type: integer
           minimum: 1
@@ -597,7 +586,7 @@ components:
         kind:
           type: string
           enum: [fact, passage]
-          description: A fact (confirmed, or 待確認 when `proposal` is present), or a document passage
+          description: A fact (confirmed, or 待確認 when `proposal` is present), or a passage of a confirmed file 來源
         label:
           type: string
           description: "A confirmed fact's is `知識庫 · <valid from, YYYY-MM-DD in Taiwan>`, a 待確認 fact's `待確認 · <valid from>`; a passage's e.g. `05-projects-and-practice.md › 05 實踐案例 … › C. 移動微型空間計畫`, `04-founder-hsiao-yu-chih.pdf › 第 2 頁`, `faq.txt › Q: 網站有英文版嗎？`"
@@ -616,7 +605,10 @@ components:
             $ref: "#/components/schemas/HistoryEntry"
         source:
           type: object
-          description: A fact's 來源 as it was given; absent for passages
+          description: >
+            What a fact was drawn from: a message 來源 as given, or the
+            passage of a file 來源 (then with its `label`, e.g.
+            `meeting.txt › 一、運送排放`); absent for passages
           required: [content, createdAt]
           properties:
             content:
@@ -624,6 +616,8 @@ components:
             createdAt:
               type: string
               format: date-time
+            label:
+              type: string
         proposal:
           $ref: "#/components/schemas/Proposal"
           description: >
@@ -687,7 +681,7 @@ components:
           description: 取代 and 過時 items first, then 新增 ones
           items:
             type: object
-            required: [id, kind]
+            required: [id, kind, status]
             properties:
               id:
                 type: string
@@ -703,6 +697,15 @@ components:
               content:
                 type: string
                 description: That fact's text; absent for 過時
+              status:
+                type: string
+                enum: [pending, confirmed, rejected, expired]
+                description: >
+                  `pending` while the proposal is; once it is decided,
+                  whether the item took effect (`confirmed`) or not
+                  (`rejected`: the proposal was rejected, or the item was
+                  left unticked); `expired` once a newer proposal expired it
+                  (see `expiredBy`)
               edited:
                 $ref: "#/components/schemas/Edited"
               target:
@@ -794,37 +797,6 @@ components:
         originalContent:
           type: string
           description: The text as extracted, before the edit
-    ChunkSummary:
-      type: object
-      required: [path, preview, embeddingModel]
-      properties:
-        path:
-          type: array
-          description: >
-            Markdown `[filename, H1, H2, H3]`, PDF `[filename, "第 N 頁"]`, txt
-            `[filename, the chunk's opening]`
-          items:
-            type: string
-        preview:
-          type: string
-          description: The first 80 characters of the chunk
-        embeddingModel:
-          type: string
-          description: The embedding model id that produced the chunk's vector
-    DocumentSummary:
-      type: object
-      required: [id, filename, chunkCount, uploadedAt]
-      properties:
-        id:
-          type: string
-        filename:
-          type: string
-        chunkCount:
-          type: integer
-          minimum: 0
-        uploadedAt:
-          type: string
-          format: date-time
     Me:
       type: object
       required: [userId, role]

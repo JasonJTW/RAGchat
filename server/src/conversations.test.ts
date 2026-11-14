@@ -18,7 +18,7 @@ const { app } = await import("./app.js");
 interface Message {
   id: string;
   role: "user" | "assistant";
-  parts: { type: string; text?: string }[];
+  parts: { type: string; text?: string; [key: string]: unknown }[];
 }
 
 const userMessage = (text: string): Message => ({
@@ -63,6 +63,29 @@ beforeEach(async () => {
 });
 
 describe("saved conversations", () => {
+  it("keep an attached file's name and type, never its contents", async () => {
+    const id = randomUUID();
+    const secret = "倉庫鑰匙放在三樓櫃子裡。";
+    const url = `data:text/plain;base64,${Buffer.from(secret).toString("base64")}`;
+    const message: Message = {
+      id: randomUUID(),
+      role: "user",
+      parts: [
+        { type: "text", text: "這是倉庫須知" },
+        { type: "file", mediaType: "text/plain", filename: "notes.txt", url },
+      ],
+    };
+    expect((await chat(id, [message])).status).toBe(200);
+
+    const [saved] = await messagesOf(id);
+    expect(saved.parts).toContainEqual({
+      type: "file",
+      mediaType: "text/plain",
+      filename: "notes.txt",
+    });
+    expect(JSON.stringify(await messagesOf(id))).not.toContain(url);
+  });
+
   it("lists a 成員's conversation and reads it back with the reply", async () => {
     const id = randomUUID();
     const question = userMessage("避免排放怎麼算？");

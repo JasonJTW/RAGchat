@@ -2,6 +2,7 @@ import { Annotation, type LangGraphRunnableConfig } from "@langchain/langgraph";
 import type { UIMessageChunk } from "ai";
 import type { Fact, PendingChange, Proposal } from "../knowledge-base.js";
 import type { Citation, Evidence } from "./ask.js";
+import type { Skipped, Upload } from "./input.js";
 import type { CorrectionDraft } from "./correct.js";
 
 /** What a message asks of the agent. */
@@ -23,17 +24,21 @@ export const AgentState = Annotation.Root({
   message: Annotation<string>,
   /** How many files the latest user message attaches. */
   attachments: Annotation<number>,
+  /** The files the latest user message attaches. */
+  files: Annotation<Upload[]>,
   /**
    * The fact ids the latest answer cited, as the client sent them back;
    * untrusted, so only current facts of the workspace count.
    */
   cited: Annotation<string[]>,
   intents: Annotation<Intent[]>,
-  // 輸入
-  /** The facts drawn from the message. */
-  extracted: Annotation<string[]>,
-  proposal: Annotation<Proposal | undefined>,
+  // 輸入 (the subgraph in input.ts keeps its own keys besides these)
+  /** The proposals the input made, one per source. */
+  proposals: Annotation<Proposal[]>,
+  skipped: Annotation<Skipped[]>,
   // 修正
+  /** The proposal the correction made. */
+  proposal: Annotation<Proposal | undefined>,
   /** The part of the message that corrects: all of it, or what precedes its question. */
   correction: Annotation<string>,
   /** The current facts the correction may be about, the cited ones first. */

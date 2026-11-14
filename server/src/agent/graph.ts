@@ -6,7 +6,7 @@ import {
   locateTargets,
   proposeCorrection,
 } from "./correct.js";
-import { extract, propose } from "./input.js";
+import { inputGraph } from "./input.js";
 import { classifyIntent } from "./intent.js";
 import { AgentState } from "./state.js";
 
@@ -14,7 +14,7 @@ import { AgentState } from "./state.js";
 //
 //   [判斷意圖] ┬─ 提問 ─→ [Jev 檢查] ┬→ [回答＋引用]
 //             │          [檢索] ───┘      ↑ (waits for 修正, when both)
-//             ├─ 輸入 ─→ [抽取] → [建立提案]
+//             ├─ 輸入 ─→ (輸入子圖) [轉文字] → [切 chunk] → [抽取] → [建立提案]
 //             └─ 修正 ─→ [定位目標事實] → [起草修正] → [比對衝突] → [建立提案]
 //
 // A message that corrects and asks runs both branches side by side. The
@@ -30,8 +30,7 @@ export const agent = new StateGraph(AgentState)
   .addNode("checkSubject", checkSubject)
   .addNode("retrieve", retrieve)
   .addNode("answer", answer, { defer: true })
-  .addNode("extract", extract)
-  .addNode("propose", propose)
+  .addNode("input", inputGraph)
   .addNode("locateTargets", locateTargets)
   .addNode("draftCorrection", draftCorrection)
   .addNode("compareConflicts", compareConflicts)
@@ -41,18 +40,17 @@ export const agent = new StateGraph(AgentState)
     "classifyIntent",
     ({ intents }) =>
       intents.includes("input")
-        ? ["extract"]
+        ? ["input"]
         : [
             ...(intents.includes("correct") ? ["locateTargets"] : []),
             ...(intents.includes("ask") ? ["checkSubject", "retrieve"] : []),
           ],
-    ["extract", "locateTargets", "checkSubject", "retrieve"],
+    ["input", "locateTargets", "checkSubject", "retrieve"],
   )
   // Retrieval runs while Jev checks the question.
   .addEdge(["checkSubject", "retrieve"], "answer")
   .addEdge("answer", END)
-  .addEdge("extract", "propose")
-  .addEdge("propose", END)
+  .addEdge("input", END)
   .addEdge("locateTargets", "draftCorrection")
   .addEdge("draftCorrection", "compareConflicts")
   .addEdge("compareConflicts", "proposeCorrection")

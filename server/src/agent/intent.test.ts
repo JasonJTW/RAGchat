@@ -68,6 +68,16 @@ describe("classifyIntent on a message that corrects and asks", () => {
   });
 });
 
+describe("classifyIntent with attachments", () => {
+  it("takes a message with files as input, whatever it says", () => {
+    expect(
+      classifyIntent({ message: "R 不是取代率，是回收率", attachments: 1 }),
+    ).toEqual({
+      intents: ["input"],
+    });
+  });
+});
+
 describe("inputBody", () => {
   it("drops the instruction, keeping the content", () => {
     expect(

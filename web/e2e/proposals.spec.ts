@@ -1,6 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { askFollowUp, send } from "./ask";
-import { openDocuments, removeAllDocuments } from "./documents";
 import { signIn } from "./sign-in";
 
 // A 提案's life: any 成員 confirms it from the 待確認 list, confirming is
@@ -9,8 +8,6 @@ import { signIn } from "./sign-in";
 // B」 as a 取代 and 「X 已經過時」 as a 過時 (server/src/stub-models.ts).
 
 test.beforeEach(async ({ page }) => {
-  await openDocuments(page);
-  await removeAllDocuments(page);
   await page.goto("/");
 });
 

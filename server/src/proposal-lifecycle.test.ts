@@ -362,3 +362,90 @@ describe("confirming a newer proposal", () => {
     expect(res.status).toBe(409);
   });
 });
+
+describe("confirming with items unticked", () => {
+  const WAREHOUSE = "倉庫在三樓";
+
+  beforeEach(() => {
+    vectors.set(TAKEN, [1, 0, 0, 0, 0]);
+    vectors.set(RECYCLED, [0.94, 0.34, 0, 0, 0]);
+    vectors.set(BY_WEIGHT, [0.82, 0, 0.57, 0, 0]);
+    vectors.set(MASS, [0, 0, 0, 1, 0]);
+    vectors.set(WAREHOUSE, [0, 0, 0, 0, 1]);
+  });
+
+  const itemOf = (proposal: Proposal, content: string) =>
+    proposal.items.find((item) => item.content === content)!;
+
+  it("expires no older pending item for an unticked one", async () => {
+    const older = await proposeFacts("member-a", TAKEN, MASS);
+    const newer = await proposeFacts("member-b", RECYCLED, WAREHOUSE);
+
+    const res = await confirm(newer.id, {
+      excluded: [itemOf(newer, RECYCLED).id],
+    });
+
+    expect(res.status).toBe(200);
+    expect((res.body as Proposal).items).toEqual([
+      expect.objectContaining({ content: RECYCLED, status: "rejected" }),
+      expect.objectContaining({ content: WAREHOUSE, status: "confirmed" }),
+    ]);
+    const pending = (await request(app).get("/api/proposals"))
+      .body as Proposal[];
+    expect(pending.map((p) => p.id)).toEqual([older.id]);
+    for (const item of pending[0].items)
+      expect(item).not.toHaveProperty("expiredBy");
+    // Ticked, the same confirmation would have expired the older TAKEN.
+    expect((await confirm(older.id)).status).toBe(200);
+    expect(await current()).toEqual([MASS, TAKEN, WAREHOUSE].sort());
+  });
+
+  it("is not stopped by a change since that touches only an unticked item", async () => {
+    const taken = await confirmed(TAKEN);
+    const note = await proposeFacts("member-b", BY_WEIGHT, WAREHOUSE);
+    const replace = await proposeCorrection("member-a", taken, {
+      content: RECYCLED,
+    });
+    await confirm(replace.id);
+
+    const res = await confirm(note.id, {
+      excluded: [itemOf(note, BY_WEIGHT).id],
+    });
+
+    expect(res.status).toBe(200);
+    expect(await current()).toEqual([RECYCLED, WAREHOUSE].sort());
+  });
+
+  it("does not count an unticked item of a later confirmation as a change since", async () => {
+    const older = await proposeFacts("member-a", BY_WEIGHT);
+    const newer = await proposeFacts("member-b", RECYCLED, WAREHOUSE);
+    await confirm(newer.id, { excluded: [itemOf(newer, RECYCLED).id] });
+
+    // RECYCLED is about R too (cosine ≈ 0.77): ticked, it would stop this.
+    const res = await confirm(older.id);
+
+    expect(res.status).toBe(200);
+  });
+
+  it("rolls the unticking back when the confirmation is stopped", async () => {
+    const taken = await confirmed(TAKEN);
+    const note = await proposeFacts("member-b", BY_WEIGHT, WAREHOUSE);
+    const replace = await proposeCorrection("member-a", taken, {
+      content: RECYCLED,
+    });
+    await confirm(replace.id);
+
+    const stopped = await confirm(note.id, {
+      excluded: [itemOf(note, WAREHOUSE).id],
+    });
+    expect(stopped.status).toBe(409);
+
+    const [pending] = (
+      (await request(app).get("/api/proposals")).body as Proposal[]
+    ).filter((p) => p.id === note.id);
+    expect(pending.items.map((item) => item.status)).toEqual([
+      "pending",
+      "pending",
+    ]);
+  });
+});

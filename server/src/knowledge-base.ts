@@ -6,10 +6,17 @@ import {
   inArray,
   isNull,
   sql,
+  type SQL,
 } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "./db.js";
-import { facts, proposalItems, proposals, sources } from "./db/schema.js";
+import {
+  facts,
+  proposalItems,
+  proposals,
+  sourceChunks,
+  sources,
+} from "./db/schema.js";
 import { embeddings } from "./models.js";
 
 // 知識庫: sources, facts and the proposals that change them (ADR-0001). The
@@ -31,6 +38,12 @@ export interface ProposalItem {
   factId?: string;
   /** That fact's text; absent for 過時. */
   content?: string;
+  /**
+   * 待確認 while the proposal is; once decided, whether the item took effect
+   * (`confirmed`), did not (`rejected`: the proposal was rejected, or the
+   * item was left unticked), or was expired by a newer proposal (`expired`).
+   */
+  status: "pending" | "confirmed" | "rejected" | "expired";
   /** Present when a member edited the fact's text inline. */
   edited?: Edited;
   /** The fact it replaces or marks 過時 (取代, 過時). */
@@ -111,9 +124,38 @@ export interface FactMatch {
    * only when it replaced one (e.g. 取代率 → 回收率 → 取代率).
    */
   history?: HistoryEntry[];
-  /** The source the fact was drawn from, as given. */
-  source: { id: string; content: string; createdAt: string };
+  /**
+   * What the fact was drawn from: a message as given, or the passage of a
+   * file, labelled with its path (e.g. "meeting.txt › 一、運送排放").
+   */
+  source: { id: string; content: string; createdAt: string; label?: string };
 }
+
+/** A passage of a file source, matching a query. */
+export interface ChunkMatch {
+  id: string;
+  /** [filename, H1, H2, H3]; a PDF's [filename, "第 N 頁"], a txt's [filename, its opening]. */
+  path: string[];
+  content: string;
+  /** When its source was given. */
+  createdAt: string;
+  /** Cosine similarity of the passage to the query. */
+  similarity: number;
+}
+
+/** A passage of a file source, as 切 chunk made it. */
+export interface SourceChunk {
+  path: string[];
+  content: string;
+  /** What is embedded: the path, then the content. */
+  embedText: string;
+}
+
+/**
+ * A fact drawn from an input: its text, and for a file the index (into
+ * `chunks`) of the passage it came from.
+ */
+export type FactDraft = string | { content: string; chunk?: number };
 
 /** A change to a current fact proposed by a correction. */
 export type Correction = {
@@ -130,33 +172,43 @@ const current = and(eq(facts.status, "confirmed"), isNull(facts.validTo));
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
- * Stores the input as a source and proposes its changes: each fact drawn
- * from it as a 新增 item, each correction as a 取代 or 過時 item. New facts
- * are embedded but pending; nothing is in the knowledge base yet. Throws
- * when a correction's target is not a current fact of the workspace.
+ * Stores the input as a source, with a file's passages, and proposes its
+ * changes: each fact drawn from it as a 新增 item, each correction as a 取代
+ * or 過時 item. New facts are embedded but pending; nothing is in the
+ * knowledge base yet, and a file's passages are answered from only once one
+ * of its proposals is confirmed. Throws when a correction's target is not a
+ * current fact of the workspace.
  */
 export async function propose(
   workspaceId: string,
   userId: string,
   input: {
-    source: { kind: "message" | "file"; content: string };
-    facts: string[];
+    source:
+      | { kind: "message"; content: string }
+      | { kind: "file"; filename: string; content: string };
+    chunks?: SourceChunk[];
+    facts: FactDraft[];
     corrections?: Correction[];
   },
 ): Promise<Proposal> {
   const corrections = input.corrections ?? [];
-  const added = [
+  const chunks = input.chunks ?? [];
+  const added: { content: string; validFrom?: Date; chunk?: number }[] = [
     ...corrections.flatMap((c) =>
       c.kind === "supersede"
         ? [{ content: c.content, validFrom: new Date(c.effectiveAt) }]
         : [],
     ),
-    ...input.facts.map((content) => ({ content, validFrom: undefined })),
+    ...input.facts.map((fact) =>
+      typeof fact === "string" ? { content: fact } : fact,
+    ),
   ];
   const model = embeddings();
-  const vectors = added.length
-    ? await model.embedDocuments(added.map((fact) => fact.content))
-    : [];
+  const texts = [
+    ...added.map((fact) => fact.content),
+    ...chunks.map((chunk) => chunk.embedText),
+  ];
+  const vectors = texts.length ? await model.embedDocuments(texts) : [];
   return db.transaction(async (tx) => {
     const targetIds = corrections.map((c) => c.targetFactId);
     if (
@@ -168,6 +220,24 @@ export async function propose(
       .insert(sources)
       .values({ workspaceId, createdBy: userId, ...input.source })
       .returning();
+    const chunkIds = chunks.length
+      ? (
+          await tx
+            .insert(sourceChunks)
+            .values(
+              chunks.map((chunk, i) => ({
+                workspaceId,
+                sourceId: source.id,
+                position: i,
+                path: chunk.path,
+                content: chunk.content,
+                embedding: vectors[added.length + i],
+                embeddingModel: model.model,
+              })),
+            )
+            .returning({ id: sourceChunks.id })
+        ).map((row) => row.id)
+      : [];
     const factIds = added.length
       ? (
           await tx
@@ -176,6 +246,7 @@ export async function propose(
               added.map((fact, i) => ({
                 workspaceId,
                 sourceId: source.id,
+                chunkId: fact.chunk === undefined ? null : chunkIds[fact.chunk],
                 content: fact.content,
                 embedding: vectors[i],
                 embeddingModel: model.model,
@@ -220,7 +291,9 @@ export async function propose(
 
 /**
  * Why a proposal could not be confirmed or rejected. An edit is invalid when
- * its item is not the proposal's, adds no fact (過時), or its text is blank.
+ * its item is not the proposal's, adds no fact (過時), or its text is blank;
+ * so is an unticked item that is not one of the proposal's live items, or
+ * unticking them all.
  * The target changed when a fact the proposal replaces or marks 過時 is no
  * longer current, and no change since explains it.
  */
@@ -278,6 +351,9 @@ export const SAME_CLAIM_AT = 0.9;
  * leave it as of each item's effective date, kept in history. An edited
  * item's fact takes the edited text, embedded anew, and keeps the extraction
  * and the editor; an edit that leaves the text as it is changes nothing.
+ * Items `excluded` (unticked on the card) take no effect: their facts are
+ * rejected, their targets left as they are, and they count in neither the
+ * re-check nor the expiry below.
  *
  * It is re-checked, edits applied, against the changes confirmed since it
  * was made: unless the member acknowledged each of them (`acknowledged`,
@@ -293,8 +369,11 @@ export async function confirmProposal(
   workspaceId: string,
   proposalId: string,
   userId: string,
-  edits: ItemEdit[] = [],
-  acknowledged: string[] = [],
+  {
+    edits = [],
+    excluded = [],
+    acknowledged = [],
+  }: { edits?: ItemEdit[]; excluded?: string[]; acknowledged?: string[] } = {},
 ): Promise<Proposal | DecisionError | Stopped> {
   const texts = edits.map((edit) => edit.content.trim());
   if (texts.some((text) => !text)) return "invalid edit";
@@ -310,6 +389,7 @@ export async function confirmProposal(
   }));
   return decide(workspaceId, proposalId, userId, "confirmed", {
     edits: edited,
+    excluded,
     acknowledged,
   });
 }
@@ -338,8 +418,10 @@ async function decide(
   status: "confirmed" | "rejected",
   {
     edits = [],
+    excluded = [],
     acknowledged = [],
   }: {
+    excluded?: string[];
     edits?: {
       itemId: string;
       content: string;
@@ -372,11 +454,33 @@ async function decide(
       const all = await itemsOf(tx, proposalId);
       const items = all.filter((item) => !item.expiredBy);
       const itemOf = new Map(items.map((item) => [item.id, item]));
-      if (edits.some((edit) => !itemOf.get(edit.itemId)?.factId))
+      const unticked = new Set(excluded);
+      if (
+        edits.some((edit) => !itemOf.get(edit.itemId)?.factId) ||
+        excluded.some((id) => !itemOf.has(id)) ||
+        (items.length > 0 && items.every((item) => unticked.has(item.id)))
+      )
         return "invalid edit";
+      const ticked = items.filter((item) => !unticked.has(item.id));
+      if (status === "confirmed" && unticked.size) {
+        // Marked first, so the re-check and the expiry below leave them out;
+        // a stopped confirmation rolls this back too.
+        await tx
+          .update(proposalItems)
+          .set({ excluded: true })
+          .where(inArray(proposalItems.id, [...unticked]));
+        const dropped = items.flatMap((item) =>
+          unticked.has(item.id) && item.factId ? [item.factId] : [],
+        );
+        if (dropped.length)
+          await tx
+            .update(facts)
+            .set({ status: "rejected" })
+            .where(inArray(facts.id, dropped));
+      }
       for (const edit of edits) {
         const item = itemOf.get(edit.itemId)!;
-        if (edit.content === item.content) continue;
+        if (unticked.has(item.id) || edit.content === item.content) continue;
         await tx
           .update(facts)
           .set({
@@ -390,7 +494,7 @@ async function decide(
           .where(eq(facts.id, item.factId!));
       }
       const now = new Date();
-      const changes = items.filter((item) => item.target);
+      const changes = ticked.filter((item) => item.target);
       if (status === "confirmed") {
         // Re-checked after the edits, so the edited texts are compared.
         const conflicts = await conflictsOf(tx, workspaceId, proposal);
@@ -419,7 +523,7 @@ async function decide(
         .where(
           and(
             eq(facts.workspaceId, workspaceId),
-            sql`${facts.id} in (select ${proposalItems.factId} from ${proposalItems} where ${proposalItems.proposalId} = ${proposalId} and ${proposalItems.expiredBy} is null)`,
+            sql`${facts.id} in (select ${proposalItems.factId} from ${proposalItems} where ${proposalItems.proposalId} = ${proposalId} and ${proposalItems.expiredBy} is null and not ${proposalItems.excluded})`,
           ),
         );
       return cardOf(tx, workspaceId, decided);
@@ -520,7 +624,7 @@ interface Related {
 // The items of other proposals (narrowed by `which`) that touch one of the
 // proposal's own live items: they change the same fact, or a fact of one is
 // at least `at` alike (cosine) to a fact of the other, the new fact and the
-// target both counting. Expired items on either side never count.
+// target both counting. Expired or unticked items on either side never count.
 async function relatedItems(
   tx: Tx,
   workspaceId: string,
@@ -550,6 +654,7 @@ async function relatedItems(
       left join facts f on f.id = i.fact_id
       left join facts t on t.id = i.target_fact_id
       where i.proposal_id = ${proposal.id} and i.expired_by is null
+        and not i.excluded
     ), theirs as (
       select i.id, i.kind, i.position, i.target_fact_id, p.id proposal_id,
         p.created_by, p.created_at, p.decided_by, p.decided_at,
@@ -560,7 +665,7 @@ async function relatedItems(
       left join facts f on f.id = i.fact_id
       left join facts t on t.id = i.target_fact_id
       where i.workspace_id = ${workspaceId} and p.id <> ${proposal.id}
-        and i.expired_by is null and ${filter}
+        and i.expired_by is null and not i.excluded and ${filter}
     )
     select distinct on (theirs.id) mine.id mine_id, theirs.id, theirs.kind,
       theirs.proposal_id, theirs.fact_content, theirs.target_content,
@@ -720,6 +825,8 @@ async function itemsOf(tx: Tx, proposalId: string): Promise<ProposalItem[]> {
     .select({
       id: proposalItems.id,
       kind: proposalItems.kind,
+      excluded: proposalItems.excluded,
+      proposalStatus: proposals.status,
       factId: proposalItems.factId,
       content: facts.content,
       originalContent: facts.originalContent,
@@ -732,6 +839,7 @@ async function itemsOf(tx: Tx, proposalId: string): Promise<ProposalItem[]> {
       expiredBy: proposalItems.expiredBy,
     })
     .from(proposalItems)
+    .innerJoin(proposals, eq(proposals.id, proposalItems.proposalId))
     .leftJoin(facts, eq(facts.id, proposalItems.factId))
     .leftJoin(target, eq(target.id, proposalItems.targetFactId))
     .where(eq(proposalItems.proposalId, proposalId))
@@ -739,6 +847,11 @@ async function itemsOf(tx: Tx, proposalId: string): Promise<ProposalItem[]> {
   return rows.map((row) => ({
     id: row.id,
     kind: row.kind,
+    status: row.excluded
+      ? "rejected"
+      : row.expiredBy != null
+        ? "expired"
+        : row.proposalStatus,
     ...(row.factId != null && {
       factId: row.factId,
       content: row.content ?? "",
@@ -785,9 +898,12 @@ export async function searchFacts(
       sourceId: sources.id,
       sourceContent: sources.content,
       sourceCreatedAt: sources.createdAt,
+      chunkContent: sourceChunks.content,
+      chunkPath: sourceChunks.path,
     })
     .from(facts)
     .innerJoin(sources, eq(sources.id, facts.sourceId))
+    .leftJoin(sourceChunks, eq(sourceChunks.id, facts.chunkId))
     .where(
       and(
         eq(facts.workspaceId, workspaceId),
@@ -814,8 +930,9 @@ export async function searchFacts(
       ...(history.length > 1 && { history }),
       source: {
         id: row.sourceId,
-        content: row.sourceContent,
+        content: row.chunkContent ?? row.sourceContent,
         createdAt: row.sourceCreatedAt.toISOString(),
+        ...(row.chunkPath && { label: row.chunkPath.join(" › ") }),
       },
     };
   });
@@ -835,8 +952,11 @@ export interface PendingFactMatch {
   createdBy: string;
   /** Present when a member edited the fact's text inline. */
   edited?: Edited;
-  /** The source the fact was drawn from, as given. */
-  source: { id: string; content: string; createdAt: string };
+  /**
+   * Where the fact was drawn from, as given: the message, or the passage of
+   * a file with its label (as `FactMatch.source`).
+   */
+  source: { id: string; content: string; createdAt: string; label?: string };
   /** The current fact it would replace (取代); absent for 新增. */
   replaces?: Fact;
   /** Its proposal, as the card shows it, to confirm it from the answer. */
@@ -871,6 +991,8 @@ export async function searchPendingFacts(
         sourceId: sources.id,
         sourceContent: sources.content,
         sourceCreatedAt: sources.createdAt,
+        chunkContent: sourceChunks.content,
+        chunkPath: sourceChunks.path,
         targetId: target.id,
         targetContent: target.content,
         targetValidFrom: target.validFrom,
@@ -878,6 +1000,7 @@ export async function searchPendingFacts(
       })
       .from(facts)
       .innerJoin(sources, eq(sources.id, facts.sourceId))
+      .leftJoin(sourceChunks, eq(sourceChunks.id, facts.chunkId))
       .innerJoin(proposalItems, eq(proposalItems.factId, facts.id))
       .innerJoin(proposals, eq(proposals.id, proposalItems.proposalId))
       .leftJoin(
@@ -912,8 +1035,9 @@ export async function searchPendingFacts(
       ...editedOf(row),
       source: {
         id: row.sourceId,
-        content: row.sourceContent,
+        content: row.chunkContent ?? row.sourceContent,
         createdAt: row.sourceCreatedAt.toISOString(),
+        ...(row.chunkPath && { label: row.chunkPath.join(" › ") }),
       },
       ...(row.targetId != null && {
         replaces: {
@@ -925,6 +1049,74 @@ export async function searchPendingFacts(
       proposal: cards.get(row.proposal.id)!,
     }));
   });
+}
+
+// From each of vector and trigram keyword search, and how they are fused
+// (reciprocal rank fusion).
+const CHUNK_CANDIDATES = 20;
+const RRF_K = 60;
+const MIN_KEYWORD_SIMILARITY = 0.1;
+
+/**
+ * The passages of file sources that best match the query, best first: the
+ * embedding cosine and pg_trgm keyword rankings, fused by reciprocal rank.
+ * Only passages of a source with a confirmed proposal count, so an
+ * unreviewed upload never reaches an answer.
+ */
+export async function searchChunks(
+  workspaceId: string,
+  query: string,
+  limit: number,
+): Promise<ChunkMatch[]> {
+  const model = embeddings();
+  const vector = await model.embedQuery(query);
+  const distance = cosineDistance(sourceChunks.embedding, vector);
+  const keyword = sql<number>`word_similarity(${query}, ${sourceChunks.content})`;
+  const ranked = (order: SQL, where?: SQL) =>
+    db
+      .select({
+        id: sourceChunks.id,
+        path: sourceChunks.path,
+        content: sourceChunks.content,
+        createdAt: sources.createdAt,
+        similarity: sql<number>`1 - (${distance})`,
+      })
+      .from(sourceChunks)
+      .innerJoin(sources, eq(sources.id, sourceChunks.sourceId))
+      .where(
+        and(
+          eq(sourceChunks.workspaceId, workspaceId),
+          eq(sourceChunks.embeddingModel, model.model),
+          sql`exists (select 1 from ${proposals} where ${proposals.sourceId} = ${sources.id} and ${proposals.status} = 'confirmed')`,
+          where,
+        ),
+      )
+      .orderBy(order)
+      .limit(CHUNK_CANDIDATES);
+  const rankings = await Promise.all([
+    ranked(distance),
+    ranked(sql`${keyword} desc`, sql`${keyword} >= ${MIN_KEYWORD_SIMILARITY}`),
+  ]);
+  const fused = new Map<
+    string,
+    { row: (typeof rankings)[number][number]; score: number }
+  >();
+  for (const ranking of rankings)
+    ranking.forEach((row, rank) => {
+      const entry = fused.get(row.id) ?? { row, score: 0 };
+      entry.score += 1 / (RRF_K + rank + 1);
+      fused.set(row.id, entry);
+    });
+  return [...fused.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(({ row }) => ({
+      id: row.id,
+      path: row.path,
+      content: row.content,
+      createdAt: row.createdAt.toISOString(),
+      similarity: Number(row.similarity),
+    }));
 }
 
 // How far back a history chain is followed; a guard, never reached in use.

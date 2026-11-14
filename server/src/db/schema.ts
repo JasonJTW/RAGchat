@@ -1,5 +1,6 @@
 import {
   type AnyPgColumn,
+  boolean,
   index,
   integer,
   jsonb,
@@ -43,12 +44,50 @@ export const sources = pgTable("sources", {
   id: uuid("id").primaryKey().defaultRandom(),
   workspaceId: workspaceId(),
   kind: sourceKind("kind").notNull(),
+  /** A file's name as uploaded; null for a chat message. */
+  filename: text("filename"),
+  /** The message, or the file's text (a PDF's pages separated by \f). */
   content: text("content").notNull(),
   createdBy: text("created_by").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
 });
+
+/**
+ * A file source's passages (依標題切、800 tokens), embedded and trigram
+ * indexed. Answers draw on them once a proposal of the source is confirmed.
+ */
+export const sourceChunks = pgTable(
+  "source_chunks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: workspaceId(),
+    sourceId: uuid("source_id")
+      .notNull()
+      .references(() => sources.id, { onDelete: "cascade" }),
+    /** Its place in the source, from 0. */
+    position: integer("position").notNull(),
+    /** [filename, H1, H2, H3]; a PDF's [filename, "第 N 頁"], a txt's [filename, its opening]. */
+    path: text("path").array().notNull(),
+    content: text("content").notNull(),
+    embedding: vector("embedding", {
+      dimensions: EMBEDDING_DIMENSIONS,
+    }).notNull(),
+    embeddingModel: text("embedding_model").notNull(),
+  },
+  (t) => [
+    index("source_chunks_source").on(t.sourceId, t.position),
+    index("source_chunks_embedding").using(
+      "hnsw",
+      t.embedding.op("vector_cosine_ops"),
+    ),
+    index("source_chunks_content_trgm").using(
+      "gin",
+      t.content.op("gin_trgm_ops"),
+    ),
+  ],
+);
 
 /**
  * 待確認 facts are the items of pending proposals; only 已確認 facts are in
@@ -70,6 +109,10 @@ export const facts = pgTable(
     sourceId: uuid("source_id")
       .notNull()
       .references(() => sources.id, { onDelete: "cascade" }),
+    /** The passage of a file source it was drawn from; null for a message. */
+    chunkId: uuid("chunk_id").references(() => sourceChunks.id, {
+      onDelete: "cascade",
+    }),
     content: text("content").notNull(),
     embedding: vector("embedding", {
       dimensions: EMBEDDING_DIMENSIONS,
@@ -161,6 +204,8 @@ export const proposalItems = pgTable("proposal_items", {
    * replacement's `valid_from` once confirmed.
    */
   effectiveAt: timestamp("effective_at", { withTimezone: true }),
+  /** Left unticked when the proposal was confirmed: it took no effect. */
+  excluded: boolean("excluded").notNull().default(false),
   /**
    * The newer proposal whose confirmation expired this pending item, as
    * making the same claim (已過期); null while it can still be confirmed.

@@ -1,6 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { askFollowUp, send } from "./ask";
-import { openDocuments, removeAllDocuments } from "./documents";
 
 // 對話中修正: ask → correct → confirm → ask again. The stub models (see
 // server/src/stub-models.ts) read 「X 不是 A，是 B」 as replacing A with B in
@@ -16,9 +15,6 @@ const today = new Intl.DateTimeFormat("sv-SE", {
 }).format(new Date());
 
 test.beforeEach(async ({ page }) => {
-  // Only the knowledge base answers: earlier tests' documents are removed.
-  await openDocuments(page);
-  await removeAllDocuments(page);
   await page.goto("/");
 });
 
