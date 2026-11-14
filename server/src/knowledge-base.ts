@@ -216,9 +216,13 @@ export async function propose(
   workspaceId: string,
   userId: string,
   input: {
-    source:
+    source: (
       | { kind: "message"; content: string }
-      | { kind: "file"; filename: string; content: string };
+      | { kind: "file"; filename: string; content: string }
+    ) & {
+      /** When it was given; now by default (the 示範資料 gives its own). */
+      createdAt?: Date;
+    };
     chunks?: SourceChunk[];
     facts: FactDraft[];
     corrections?: Correction[];

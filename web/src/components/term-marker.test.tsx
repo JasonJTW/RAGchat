@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { TermMarker } from "./term-marker";
+import { RoleContext } from "./workspace-gate";
 
 afterEach(() => {
   cleanup();
@@ -58,4 +59,14 @@ it("says why a term was refused", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "沒有成功：這則內容含有密碼或 API key",
   );
+});
+
+it("is not shown to a 訪客, whose trial is not de-identified", () => {
+  render(
+    <RoleContext.Provider value="guest">
+      <TermMarker />
+    </RoleContext.Provider>,
+  );
+
+  expect(screen.queryByText("標記敏感詞")).toBeNull();
 });

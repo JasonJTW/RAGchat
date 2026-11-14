@@ -11,6 +11,8 @@ installStubModels();
 // the stub off, so none is ever set in tests.
 process.env.STUB_AUTH = "1";
 delete process.env.CLERK_SECRET_KEY;
+// The human check (Turnstile) is faked too: the token "stub-pass" passes.
+process.env.STUB_TURNSTILE = "1";
 // De-identification (pseudonyms.ts) runs on the local analyzer, never a
 // Presidio sidecar, with this run's own key (vitest.global-setup.ts).
 globalThis.PII_ANALYZER = localAnalyzer();

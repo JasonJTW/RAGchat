@@ -344,7 +344,9 @@ function isGuest(workspaceId: string): Promise<boolean> {
       .select({ kind: workspaces.kind })
       .from(workspaces)
       .where(eq(workspaces.id, workspaceId))
-      .then(([row]) => row?.kind === "guest");
+      // A 訪客's trial and the 示範資料 template (demo-seed.ts) hold no real
+      // data and are not de-identified.
+      .then(([row]) => row?.kind === "guest" || row?.kind === "demo");
     guest.catch(() => kinds.delete(workspaceId));
     kinds.set(workspaceId, guest);
   }

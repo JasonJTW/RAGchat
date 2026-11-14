@@ -22,7 +22,8 @@ import {
 import { inputBody } from "./intent.js";
 import { mapLimited } from "./limited.js";
 import { type LinkedFact, linkEntities } from "./link-entities.js";
-import { type NodeConfig, writeText } from "./state.js";
+import { type NodeConfig, purposeOf, writeText } from "./state.js";
+import type { Caller } from "../workspaces.js";
 
 // The 輸入 subgraph, shared by a chat message (its text or its attachments)
 // and the upload endpoint (POST /api/sources):
@@ -77,6 +78,7 @@ interface Input {
 export const InputState = Annotation.Root({
   workspaceId: Annotation<string>,
   userId: Annotation<string>,
+  role: Annotation<Caller["role"]>,
   /** The member's message: the input itself, or a note on the files. */
   message: Annotation<string>,
   /** Files to input; when there are any, the message is not a source. */
@@ -232,7 +234,7 @@ const Extraction = z.object({
  */
 export async function extract(
   state: Pick<InputState, "inputs"> &
-    Partial<Pick<InputState, "message" | "files">>,
+    Partial<Pick<InputState, "message" | "files" | "role">>,
   config: NodeConfig = {},
 ): Promise<Pick<InputState, "inputs">> {
   const note = state.files?.length ? inputBody(state.message ?? "") : "";
@@ -249,7 +251,7 @@ export async function extract(
   const found = await mapLimited(units, EXTRACT_CONCURRENCY, async (unit) => {
     const hint = hintFor(state.inputs[unit.d].source);
     const { facts } = Extraction.parse(
-      await chatModel("extract")
+      await chatModel(purposeOf(state, "extract"))
         .withStructuredOutput(Extraction, { name: "extraction" })
         .invoke(
           [
@@ -360,10 +362,12 @@ export async function inputFiles(
   workspaceId: string,
   userId: string,
   files: Upload[],
+  role?: Caller["role"],
 ): Promise<{ refusal?: Refusal; proposals: Proposal[]; skipped: Skipped[] }> {
   const out = await inputGraph.invoke({
     workspaceId,
     userId,
+    role,
     message: "",
     files,
   });

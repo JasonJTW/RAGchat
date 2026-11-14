@@ -8,7 +8,7 @@ import {
   searchFacts,
 } from "../knowledge-base.js";
 import { chatModel } from "../models.js";
-import { type NodeConfig, type State, writeText } from "./state.js";
+import { type NodeConfig, purposeOf, type State, writeText } from "./state.js";
 
 // The 修正 branch: a member says a fact is wrong or no longer holds
 // (「R 不是取代率，是回收率」). The agent finds the fact and proposes to
@@ -91,13 +91,14 @@ const TEAM_DATE = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Taipei" });
  * doesn't fit is dropped.
  */
 export async function draftCorrection(
-  state: Pick<State, "correction" | "candidates">,
+  state: Pick<State, "correction" | "candidates"> &
+    Partial<Pick<State, "role">>,
   config: NodeConfig = {},
 ): Promise<Pick<State, "drafts">> {
   if (!state.candidates.length) return { drafts: [] };
   const now = new Date();
   const { corrections } = Drafted.parse(
-    await chatModel("extract")
+    await chatModel(purposeOf(state, "extract"))
       .withStructuredOutput(Drafted, { name: "correction" })
       .invoke(
         [

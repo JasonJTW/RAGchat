@@ -19,9 +19,9 @@ describe("callerOf", () => {
     );
   });
 
-  it("gives a 訪客 no workspace", async () => {
+  it("gives a 訪客 no workspace before they pass the human check", async () => {
     expect(await callerOf(requestFrom(stubSession("user_g", "guest")))).toBe(
-      "guest",
+      "unverified",
     );
   });
 

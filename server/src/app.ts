@@ -3,6 +3,8 @@ import express, {
   type RequestHandler,
   type Response,
 } from "express";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import cors from "cors";
 import multer from "multer";
 import { z } from "zod";
@@ -22,6 +24,15 @@ import {
   rejectProposal,
   type Stopped,
 } from "./knowledge-base.js";
+import { passesTurnstile } from "./turnstile.js";
+import {
+  GUEST_LIMITS,
+  type Refusal,
+  resetTrial,
+  trialOf,
+  useAllowance,
+  verifyGuest,
+} from "./trial.js";
 import {
   DeidentificationUnavailable,
   listTerms,
@@ -34,6 +45,11 @@ import { containsSecret, SECRET_REFUSAL } from "./secrets.js";
 import { callerOf, type Caller } from "./workspaces.js";
 
 export const app = express();
+const EXAMPLE_UPLOAD = "meeting-2026-11-12.txt";
+const EXAMPLE_TEXT = readFileSync(
+  path.join(import.meta.dirname, "../demo-data/upload", EXAMPLE_UPLOAD),
+  "utf8",
+);
 // Uploads are buffered in memory, so cap what one request can hold.
 export const MAX_UPLOAD_FILES = 10;
 const upload = multer({
@@ -59,19 +75,58 @@ app.get("/api/me", async (req, res) => {
     res.status(401).json({ error: "sign in first" });
     return;
   }
-  res.json(identity);
+  if (identity.role === "member") {
+    res.json(identity);
+    return;
+  }
+  const trial = await trialOf(identity.userId);
+  res.json({ ...identity, trial: { verified: trial !== "unverified" } });
 });
 
-// Every knowledge base API acts for a 成員 in the team workspace: 401 when
-// nobody is signed in, 403 for a 訪客 (their trial workspace comes in #38).
-const requireMember: RequestHandler = async (req, res, next) => {
+// 訪客試用: a 訪客 passes the human check (a Turnstile token) to get their
+// 試用工作區, made from the 示範資料 the first time; the check holds a day.
+const VerifyBody = z.object({ token: z.string().min(1).max(4096) });
+
+app.post("/api/trial/verify", async (req, res) => {
+  const identity = await identify(req);
+  if (!identity) {
+    res.status(401).json({ error: "sign in first" });
+    return;
+  }
+  if (identity.role !== "guest") {
+    res.status(403).json({ error: "only a 訪客 has a trial workspace" });
+    return;
+  }
+  const body = VerifyBody.safeParse(req.body);
+  if (!body.success || !(await passesTurnstile(body.data.token, req.ip))) {
+    res.status(403).json({ error: "人機驗證沒有通過，請再試一次。" });
+    return;
+  }
+  await verifyGuest(identity.userId);
+  res.json({ verified: true });
+});
+
+// The example file a 訪客 can upload to see a 取代 happen.
+app.get("/api/trial/example", (_req, res) => {
+  res.attachment(EXAMPLE_UPLOAD);
+  res.type("text/plain; charset=utf-8");
+  res.send(EXAMPLE_TEXT);
+});
+
+// Every knowledge base API acts for the caller in their workspace: a 成員 in
+// the team workspace, a 訪客 in their own 試用工作區. 401 when nobody is
+// signed in; 403 for a 訪客 who has not passed the human check today.
+const requireCaller: RequestHandler = async (req, res, next) => {
   const caller = await callerOf(req);
   if (caller === "signed out") {
     res.status(401).json({ error: "sign in first" });
     return;
   }
-  if (caller === "guest") {
-    res.status(403).json({ error: "guest trials are not open yet" });
+  if (caller === "unverified") {
+    res.status(403).json({
+      error: "pass the human check first (POST /api/trial/verify)",
+      code: "verify",
+    });
     return;
   }
   res.locals.caller = caller;
@@ -84,10 +139,69 @@ app.use(
     "/api/conversations",
     "/api/proposals",
     "/api/sources",
+    "/api/trial/reset",
     "/api/terms",
   ],
-  requireMember,
+  requireCaller,
 );
+
+// What a 訪客 is told when a request goes over the trial's limits.
+const REFUSED: Record<
+  Refusal | "file size",
+  { status: number; error: string }
+> = {
+  messages: {
+    status: 429,
+    error: `今天的試用訊息已用完（每天 ${GUEST_LIMITS.messages} 則），明天再來試試。`,
+  },
+  uploads: {
+    status: 429,
+    error: `今天的上傳已用完（每天 ${GUEST_LIMITS.uploads} 個檔案），明天再來試試。`,
+  },
+  paused: {
+    status: 429,
+    error: "今天所有訪客的試用額度已用完，訪客試用暫停，明天再開放。",
+  },
+  "file size": {
+    status: 413,
+    error: `試用時每個檔案最大 ${GUEST_LIMITS.fileBytes / 1024 / 1024} MB。`,
+  },
+};
+
+/**
+ * For a 訪客, counts the request toward the trial's limits; false (and the
+ * response sent) when it goes over. A 成員 has no limits.
+ */
+async function withinLimits(
+  res: Response,
+  files: { bytes: Buffer }[],
+  messages: number,
+): Promise<boolean> {
+  const { role, userId } = callerIn(res);
+  if (role !== "guest") return true;
+  const refusal = files.some(
+    (file) => file.bytes.length > GUEST_LIMITS.fileBytes,
+  )
+    ? "file size"
+    : await useAllowance(userId, { messages, uploads: files.length });
+  if (refusal === "ok") return true;
+  const { status, error } = REFUSED[refusal];
+  res.status(status).json({ error, code: refusal });
+  return false;
+}
+
+// Puts the 訪客's 試用工作區 back to the 示範資料.
+app.post("/api/trial/reset", async (_req, res) => {
+  const { role, workspaceId } = callerIn(res);
+  if (role !== "guest") {
+    res
+      .status(403)
+      .json({ error: "only a 訪客's trial workspace can be reset" });
+    return;
+  }
+  await resetTrial(workspaceId);
+  res.json({ reset: true });
+});
 
 // The knowledge base and conversations hold pseudonyms (ADR-0004); every
 // JSON response puts the real values back for the 成員. (The chat stream
@@ -162,6 +276,7 @@ app.post("/api/chat", async (req, res) => {
     res.status(404).json({ error: "conversation not found" });
     return;
   }
+  if (!(await withinLimits(res, files, 1))) return;
   await streamReply(res, callerIn(res), messages, files, id);
 });
 
@@ -283,11 +398,13 @@ app.post("/api/sources", upload.array("files"), async (req, res) => {
     res.status(400).json({ error: "attach at least one file as `files`" });
     return;
   }
-  const { workspaceId, userId } = callerIn(res);
+  if (!(await withinLimits(res, files, 0))) return;
+  const { workspaceId, userId, role } = callerIn(res);
   const { refusal, proposals, skipped } = await inputFiles(
     workspaceId,
     userId,
     files,
+    role,
   );
   if (refusal) {
     res.status(REFUSAL_STATUS[refusal.reason]).json({ error: refusal.message });
@@ -308,6 +425,17 @@ const REFUSAL_STATUS = {
 // in all later input) or not (never pseudonymised). Terms go in the body,
 // never the URL, which proxies log.
 const TermBody = z.object({ term: z.string().trim().min(1).max(100) });
+
+// A 訪客's trial is never de-identified (ADR-0004), so it has no lists.
+app.use("/api/terms", (_req, res, next) => {
+  if (callerIn(res).role === "guest") {
+    res.status(403).json({
+      error: "a trial workspace is not de-identified; it has no terms",
+    });
+    return;
+  }
+  next();
+});
 
 app.get("/api/terms", async (_req, res) => {
   res.json(await listTerms(callerIn(res).workspaceId));

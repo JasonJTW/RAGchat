@@ -6,9 +6,10 @@ import {
   type Mention,
   type Relation,
 } from "../entities.js";
-import { chatModel } from "../models.js";
+import { chatModel, type ModelPurpose } from "../models.js";
 import { mapLimited } from "./limited.js";
-import type { NodeConfig } from "./state.js";
+import { type NodeConfig, purposeOf } from "./state.js";
+import type { Caller } from "../workspaces.js";
 
 // [連結實體], in the 輸入 subgraph between [抽取] and [建立提案]: names the
 // entities each fact speaks of and the relations it states between them,
@@ -83,14 +84,16 @@ const Linked = z.object({
  * existing one it means or left new (no `entityId`).
  */
 export async function linkEntities<T extends { facts: LinkedFact[] }>(
-  state: { workspaceId: string; inputs: T[] },
+  state: { workspaceId: string; inputs: T[]; role?: Caller["role"] },
   config: NodeConfig = {},
 ): Promise<{ inputs: T[] }> {
+  // A 訪客's entities are named and linked by GUEST_MODEL.
+  const purpose = purposeOf(state, "extract");
   return {
     inputs: await Promise.all(
       state.inputs.map((input) =>
         input.facts.length
-          ? linkInput(state.workspaceId, input, config)
+          ? linkInput(state.workspaceId, input, purpose, config)
           : Promise.resolve(input),
       ),
     ),
@@ -100,9 +103,10 @@ export async function linkEntities<T extends { facts: LinkedFact[] }>(
 async function linkInput<T extends { facts: LinkedFact[] }>(
   workspaceId: string,
   input: T,
+  purpose: ModelPurpose,
   config: NodeConfig,
 ): Promise<T> {
-  const named = await nameEntities(input.facts, config);
+  const named = await nameEntities(input.facts, purpose, config);
   const found = await findEntities(
     workspaceId,
     named.flatMap((fact) => fact.entities.map((e) => e.name)),
@@ -116,7 +120,14 @@ async function linkInput<T extends { facts: LinkedFact[] }>(
       ),
     ),
   ];
-  const chosen = await choose(vague, found, input.facts, named, config);
+  const chosen = await choose(
+    vague,
+    found,
+    input.facts,
+    named,
+    purpose,
+    config,
+  );
   return {
     ...input,
     facts: input.facts.map((fact, f) => {
@@ -137,6 +148,7 @@ async function linkInput<T extends { facts: LinkedFact[] }>(
 // The entities and relations of each fact, as the model names them.
 async function nameEntities(
   facts: LinkedFact[],
+  purpose: ModelPurpose,
   config: NodeConfig,
 ): Promise<{ entities: Mention[]; relations: Relation[] }[]> {
   const batches = Array.from(
@@ -146,7 +158,7 @@ async function nameEntities(
   const answers = await mapLimited(batches, CONCURRENCY, async (start) => {
     const batch = facts.slice(start, start + FACTS_PER_CALL);
     const answer = Named.safeParse(
-      await chatModel("extract")
+      await chatModel(purpose)
         .withStructuredOutput(Named, { name: "entities" })
         .invoke(
           [
@@ -198,6 +210,7 @@ async function choose(
   found: Map<string, { candidates: EntityRef[] }>,
   facts: LinkedFact[],
   named: { entities: Mention[] }[],
+  purpose: ModelPurpose,
   config: NodeConfig,
 ): Promise<Map<string, string>> {
   const chosen = new Map<string, string>();
@@ -217,7 +230,7 @@ async function choose(
     })
     .join("\n");
   const answer = Linked.safeParse(
-    await chatModel("extract")
+    await chatModel(purpose)
       .withStructuredOutput(Linked, { name: "entity-link" })
       .invoke([new SystemMessage(LINK_PROMPT), new HumanMessage(listing)], {
         signal: config.signal,
