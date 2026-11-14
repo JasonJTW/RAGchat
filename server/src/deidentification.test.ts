@@ -173,6 +173,23 @@ describe("an input", () => {
     expect(JSON.stringify(listed.body)).not.toContain("〔");
   });
 
+  it("of a file refused for its format saves no name from its filename in clear", async () => {
+    const parts = await say(
+      "請記下這份",
+      [filePart("王小明先生-0912-345-678.xlsx", "PK")],
+      "conv-refused",
+    );
+
+    expect(textOf(parts)).toContain(
+      "不支援的檔案格式：王小明先生-0912-345-678.xlsx",
+    );
+    const stored = await dump();
+    expect(stored).not.toContain("王小明");
+    expect(stored).not.toContain("0912-345-678");
+    const res = await request(app).get("/api/conversations/conv-refused");
+    expect(JSON.stringify(res.body)).toContain("王小明先生-0912-345-678.xlsx");
+  });
+
   it("stores a 成員's inline edit pseudonymised", async () => {
     const [card] = cardsOf(await say(INPUT));
     const res = await request(app)

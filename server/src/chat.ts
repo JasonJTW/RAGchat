@@ -103,8 +103,15 @@ export async function streamReply(
       let safe: string[];
       let reid: Reidentifier;
       try {
+        // The files' names too: a file refused before [去識別] (format,
+        // size) keeps its name in the reply and the saved conversation,
+        // which are pseudonymised only for values already known.
         [safe, reid] = await Promise.all([
-          pseudonymize(workspaceId, [...turns.map((t) => t.content), message]),
+          pseudonymize(workspaceId, [
+            ...files.map((file) => file.filename),
+            ...turns.map((t) => t.content),
+            message,
+          ]).then((all) => all.slice(files.length)),
           reidentifier(workspaceId),
         ]);
       } catch (error) {
