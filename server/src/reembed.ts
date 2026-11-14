@@ -79,16 +79,21 @@ export async function reembed({
       if (!rows.length) break;
       const vectors = await model.embedDocuments(rows.map((r) => r.text));
       await db.transaction(async (tx) => {
-        for (const [i, row] of rows.entries())
-          await tx
+        for (const [i, row] of rows.entries()) {
+          // Only while still stale: a row embedded anew meanwhile (an edit
+          // with the current model) keeps that embedding, not this one of
+          // its old text.
+          const updated = await tx
             .update(k.table)
             .set({
               embedding: vectors[i],
               embeddingModel: model.model,
             })
-            .where(eq(k.id, row.id));
+            .where(and(eq(k.id, row.id), ne(k.embeddingModel, model.model)))
+            .returning({ id: k.id });
+          counts[kind] += updated.length;
+        }
       });
-      counts[kind] += rows.length;
     }
   }
   return counts;

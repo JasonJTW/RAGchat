@@ -48,15 +48,19 @@ export async function locateTargets(
     }))
     .sort((a, b) => b.score - a.score)
     .map(({ fact }) => fact);
-  const seen = new Set(ranked.map((fact) => fact.id));
+  // Every cited fact is kept (at most six are looked up): those ranked too
+  // low take the places of the lowest-ranked uncited facts.
+  const unranked = cited.filter(
+    (fact) => !ranked.some((r) => r.id === fact.id),
+  );
+  const uncitedRoom = CANDIDATES - cited.length;
+  let uncited = 0;
   const candidates = [
-    ...ranked,
-    ...cited.filter((fact) => !seen.has(fact.id)),
+    ...ranked.filter(
+      (fact) => wasCited.has(fact.id) || uncited++ < uncitedRoom,
+    ),
+    ...unranked,
   ].slice(0, CANDIDATES);
-  // A cited fact is kept even when six others rank higher.
-  for (const fact of cited)
-    if (!candidates.some((c) => c.id === fact.id))
-      candidates.splice(candidates.length - 1, 1, fact);
   return { candidates };
 }
 

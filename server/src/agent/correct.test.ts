@@ -82,6 +82,27 @@ describe("locateTargets", () => {
     expect(drafts.map((d) => d.target.id)).toEqual([v1]);
   });
 
+  it("keeps every cited fact, however far down they rank", async () => {
+    const others = Array.from({ length: 22 }, (_, i) => `R 的第 ${i} 種說法`);
+    others.forEach((text) => stubs.vectors.set(text, [1, 0.01, 0]));
+    stubs.vectors.set("週會在週三", [0, 0, 1]);
+    stubs.vectors.set("週報在週五", [0, 0.1, 1]);
+    stubs.vectors.set("R 不是取代率，是回收率", [1, 0, 0]);
+    const ids = await known(...others, "週會在週三", "週報在週五");
+    const [meeting, weekly] = ids.slice(-2);
+
+    const { candidates } = await locateTargets({
+      workspaceId,
+      correction: "R 不是取代率，是回收率",
+      cited: [meeting, weekly],
+    });
+
+    expect(candidates).toHaveLength(6);
+    expect(candidates.map((c) => c.id)).toEqual(
+      expect.arrayContaining([meeting, weekly]),
+    );
+  });
+
   it("ignores cited ids that are not current facts of the workspace", async () => {
     const [r] = await known("R 代表取代率");
     workspaceId = await createWorkspace("guest", "other");

@@ -1,4 +1,7 @@
+import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
+import { db } from "./db.js";
+import { facts } from "./db/schema.js";
 import {
   confirmProposal,
   propose,
@@ -63,6 +66,51 @@ describe("reembed", () => {
       expect.objectContaining({ content: "「取代率 R」是 0.7" }),
     ]);
     expect(await searchChunks(workspaceId, "R 是 0.7", 5)).toHaveLength(1);
+  });
+
+  it("leaves a row embedded anew meanwhile (an edit) as the edit left it", async () => {
+    installStubModels();
+    process.env.EMBEDDING_MODEL = "old-embedding";
+    const workspaceId = await seeded();
+    process.env.EMBEDDING_MODEL = "new-embedding";
+    const [fact] = await db
+      .select({ id: facts.id })
+      .from(facts)
+      .where(eq(facts.workspaceId, workspaceId));
+    const edited = new Array<number>(1536).fill(0);
+    edited[1535] = 1;
+    // While the batch is being embedded, a member's edit re-embeds the fact.
+    const stubs = globalThis.MODEL_STUBS!;
+    globalThis.MODEL_STUBS = {
+      ...stubs,
+      embeddings: (id) => {
+        const real = stubs.embeddings(id);
+        const embedDocuments = real.embedDocuments.bind(real);
+        real.embedDocuments = async (texts) => {
+          await db
+            .update(facts)
+            .set({
+              content: "「取代率 R」是 0.8",
+              embedding: edited,
+              embeddingModel: "new-embedding",
+            })
+            .where(eq(facts.id, fact.id));
+          return embedDocuments(texts);
+        };
+        return real;
+      },
+    };
+
+    const counts = await reembed({ workspaceId });
+
+    expect(counts.facts).toBe(0);
+    const [match] = await searchFacts(
+      workspaceId,
+      { text: "x", vector: edited },
+      1,
+    );
+    expect(match).toMatchObject({ content: "「取代率 R」是 0.8" });
+    expect(match.similarity).toBeCloseTo(1);
   });
 
   it("leaves rows of the current model as they are", async () => {
