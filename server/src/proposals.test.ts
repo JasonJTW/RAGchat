@@ -65,6 +65,11 @@ async function citedFacts(question = QUESTION): Promise<Citation[]> {
     .filter((c) => c.kind === "fact");
 }
 
+/** The cited facts that are in the knowledge base: confirmed, not 待確認. */
+async function knownFacts(question = QUESTION): Promise<Citation[]> {
+  return (await citedFacts(question)).filter((c) => !c.proposal);
+}
+
 beforeEach(async () => {
   const { chat } = installStubModels();
   chat.reply = "A = m × EF × R × L。[1]";
@@ -90,7 +95,7 @@ describe("an input message", () => {
   it("puts nothing in the knowledge base before the proposal is confirmed", async () => {
     await input();
 
-    expect(await citedFacts()).toEqual([]);
+    expect(await knownFacts()).toEqual([]);
   });
 });
 
@@ -177,8 +182,8 @@ describe("the chat", () => {
     await chat("請確認所有提案");
     await chat(`確認提案 ${earlier.id}`);
 
-    expect(await citedFacts("R 是什麼？")).toEqual([]);
-    expect(await citedFacts()).toEqual([]);
+    expect(await knownFacts("R 是什麼？")).toEqual([]);
+    expect(await knownFacts()).toEqual([]);
     // Still pending, so a member can still confirm it.
     const res = await request(app).post(`/api/proposals/${earlier.id}/confirm`);
     expect(res.status).toBe(200);
@@ -344,10 +349,22 @@ describe("a correction in reply to an answer", () => {
         },
       ],
     });
-    // Until it is confirmed, answers still give the old fact.
-    expect(await citedFacts()).toEqual([
-      expect.objectContaining({ text: FORMULA }),
+    // Until it is confirmed, answers give the old fact first, the pending
+    // new one beside it, labelled 待確認.
+    const facts = await citedFacts();
+    expect(facts).toEqual([
+      expect.objectContaining({ id: cited.id, text: FORMULA }),
+      expect.objectContaining({
+        text: RECYCLED,
+        label: expect.stringMatching(/^待確認 · /) as unknown,
+        replaces: cited.id,
+        proposal: expect.objectContaining({
+          id: proposal.id,
+          status: "pending",
+        }) as unknown,
+      }),
     ]);
+    expect(facts[0]).not.toHaveProperty("proposal");
   });
 
   it("once confirmed, answers give only the new fact, with the old one in its history", async () => {
@@ -444,5 +461,91 @@ describe("a correction in reply to an answer", () => {
         .map((p) => p.delta)
         .join(""),
     ).toContain("找不到");
+  });
+});
+
+describe("an answer drawing on a pending fact", () => {
+  it("labels it 待確認 with its proposal, and confirming that proposal makes it a confirmed fact", async () => {
+    const proposal = await input();
+
+    const [fact] = await citedFacts();
+
+    expect(fact).toMatchObject({
+      text: FORMULA,
+      label: expect.stringMatching(/^待確認 · \d{4}-\d{2}-\d{2}$/) as unknown,
+      proposal: { id: proposal.id, status: "pending" },
+    });
+    const res = await request(app).post(
+      `/api/proposals/${proposal.id}/confirm`,
+    );
+    expect(res.status).toBe(200);
+    const [confirmed] = await citedFacts();
+    expect(confirmed.text).toBe(FORMULA);
+    expect(confirmed).not.toHaveProperty("proposal");
+    expect(confirmed.label).toMatch(/^知識庫 · /);
+  });
+
+  it("tells the model which passages are 待確認", async () => {
+    const { chat: model } = installStubModels();
+    await input();
+
+    await chat(QUESTION);
+
+    expect(model.prompts[0]).toContain(`待確認 · `);
+    expect(model.prompts[0]).toMatch(/待確認.*先給知識庫的說法/s);
+  });
+
+  it("leaves out an expired or rejected proposal's facts", async () => {
+    const proposal = await input();
+    await request(app).post(`/api/proposals/${proposal.id}/reject`);
+
+    expect(await citedFacts()).toEqual([]);
+  });
+});
+
+describe("a message that corrects and asks", () => {
+  const MESSAGE = "R 不是取代率，是回收率，那現在 A 怎麼算？";
+
+  it("gets a correction proposal, then an answer from the confirmed facts noting the correction is pending", async () => {
+    const proposal = await input();
+    await request(app).post(`/api/proposals/${proposal.id}/confirm`);
+    const earlier = [
+      { id: "q", role: "user", parts: [{ type: "text", text: QUESTION }] },
+      { id: "a", role: "assistant", parts: await chat(QUESTION) },
+    ];
+
+    const parts = await chat(MESSAGE, earlier);
+
+    const card = parts.findIndex((p) => p.type === "data-proposal");
+    expect(parts[card].data).toMatchObject({
+      status: "pending",
+      items: [{ kind: "supersede", target: { content: FORMULA } }],
+    });
+    const answer = parts.findIndex(
+      (p) => p.type === "text-start" && p.id === "answer",
+    );
+    expect(answer).toBeGreaterThan(card);
+    const citations = parts
+      .filter((p) => p.type === "data-citation")
+      .map((p) => p.data as Citation);
+    expect(citations.map((c) => c.text)).toEqual([FORMULA]);
+    const text = parts
+      .filter((p) => p.type === "text-delta")
+      .map((p) => p.delta)
+      .join("");
+    expect(text).toContain("A = m × EF × R × L");
+    expect(text).toContain("你剛提出的修正還待確認");
+  });
+
+  it("is only answered when the correction finds no fact, saying so", async () => {
+    const parts = await chat(MESSAGE);
+
+    expect(parts.some((p) => p.type === "data-proposal")).toBe(false);
+    const text = parts
+      .filter((p) => p.type === "text-delta")
+      .map((p) => p.delta)
+      .join("");
+    expect(text).toContain("找不到");
+    expect(text).not.toContain("你剛提出的修正還待確認");
   });
 });

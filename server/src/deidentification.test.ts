@@ -94,6 +94,9 @@ async function dump(): Promise<string> {
     "proposal_items",
     "conversations",
     "pseudonyms",
+    "entities",
+    "entity_aliases",
+    "edges",
   ];
   const rows = await Promise.all(
     tables.map((table) =>
@@ -104,6 +107,8 @@ async function dump(): Promise<string> {
   );
   return JSON.stringify(rows.map((r) => r.rows));
 }
+
+const NOTHING = JSON.stringify(Array.from({ length: 10 }, () => []));
 
 // Everything the models were sent: prompts and texts to embed.
 const modelInput = () =>
@@ -218,7 +223,7 @@ describe("a secret", () => {
 
     expect(res.status).toBe(422);
     expect((res.body as { error: string }).error).toContain("密碼或 API key");
-    expect(await dump()).toBe(JSON.stringify([[], [], [], [], [], [], []]));
+    expect(await dump()).toBe(NOTHING);
   });
 
   it("in an inline edit is refused", async () => {
@@ -331,7 +336,7 @@ describe("marking terms", () => {
       .put("/api/terms")
       .send({ term: "密碼是 Hunter2024!", sensitive: true });
     expect(res.status).toBe(422);
-    expect(await dump()).toBe(JSON.stringify([[], [], [], [], [], [], []]));
+    expect(await dump()).toBe(NOTHING);
   });
 });
 
@@ -350,7 +355,7 @@ describe("when de-identification can't run", () => {
         .post("/api/sources")
         .attach("files", Buffer.from("王小明先生\n"), "a.txt");
       expect(res.status).toBe(503);
-      expect(await dump()).toBe(JSON.stringify([[], [], [], [], [], [], []]));
+      expect(await dump()).toBe(NOTHING);
     } finally {
       globalThis.PII_ANALYZER = analyzer;
     }

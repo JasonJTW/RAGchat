@@ -194,40 +194,53 @@ function Citations({ message }: { message: ChatMessage }) {
     part.type === "data-citation" ? [part.data] : [],
   );
   if (citations.length === 0) return null;
+  // A 提案's card goes under the first of its facts cited.
+  const carded = new Set<string>();
   return (
     <ul aria-label="出處" className="mt-2 border-t pt-2 text-sm text-zinc-600">
-      {citations.map((citation) => (
-        <li key={citation.id}>
-          <details>
-            <summary className="cursor-pointer">
-              [{citation.marker}] {citation.label}
-            </summary>
-            <p className="mt-1 whitespace-pre-wrap">{citation.text}</p>
-            {citation.edited && (
-              <figure className="mt-1">
-                <figcaption className="text-xs">
-                  經 {citation.edited.by} 編輯，原始抽取：
-                </figcaption>
-                <blockquote className="border-l-2 pl-2 whitespace-pre-wrap">
-                  {citation.edited.originalContent}
-                </blockquote>
-              </figure>
-            )}
-            {citation.history && <History entries={citation.history} />}
-            {citation.source && (
-              <figure className="mt-1">
-                <figcaption className="text-xs">
-                  來源原文
-                  {citation.source.label && ` · ${citation.source.label}`}
-                </figcaption>
-                <blockquote className="border-l-2 pl-2 whitespace-pre-wrap">
-                  {citation.source.content}
-                </blockquote>
-              </figure>
-            )}
-          </details>
-        </li>
-      ))}
+      {citations.map((citation) => {
+        const proposal = citation.proposal;
+        const card = proposal && !carded.has(proposal.id);
+        if (proposal) carded.add(proposal.id);
+        return (
+          <li key={citation.id}>
+            <details>
+              <summary className="cursor-pointer">
+                [{citation.marker}] {citation.label}
+                {proposal && (
+                  <span className="ml-2 rounded bg-amber-100 px-1 text-xs text-amber-900">
+                    未經團隊確認
+                  </span>
+                )}
+              </summary>
+              <p className="mt-1 whitespace-pre-wrap">{citation.text}</p>
+              {citation.edited && (
+                <figure className="mt-1">
+                  <figcaption className="text-xs">
+                    經 {citation.edited.by} 編輯，原始抽取：
+                  </figcaption>
+                  <blockquote className="border-l-2 pl-2 whitespace-pre-wrap">
+                    {citation.edited.originalContent}
+                  </blockquote>
+                </figure>
+              )}
+              {citation.history && <History entries={citation.history} />}
+              {citation.source && (
+                <figure className="mt-1">
+                  <figcaption className="text-xs">
+                    來源原文
+                    {citation.source.label && ` · ${citation.source.label}`}
+                  </figcaption>
+                  <blockquote className="border-l-2 pl-2 whitespace-pre-wrap">
+                    {citation.source.content}
+                  </blockquote>
+                </figure>
+              )}
+              {card && <ProposalCard proposal={proposal} />}
+            </details>
+          </li>
+        );
+      })}
     </ul>
   );
 }

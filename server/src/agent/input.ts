@@ -20,12 +20,14 @@ import {
   SUPPORTED_FORMATS,
 } from "../source-files.js";
 import { inputBody } from "./intent.js";
+import { mapLimited } from "./limited.js";
+import { type LinkedFact, linkEntities } from "./link-entities.js";
 import { type NodeConfig, writeText } from "./state.js";
 
 // The 輸入 subgraph, shared by a chat message (its text or its attachments)
 // and the upload endpoint (POST /api/sources):
 //
-//   [轉文字] → [去識別] → [切 chunk] → [抽取] → [建立提案]
+//   [轉文字] → [去識別] → [切 chunk] → [抽取] → [連結實體] → [建立提案]
 //
 // Past [去識別] a file's name and text hold pseudonyms only (ADR-0004); a
 // message arrives de-identified already (chat.ts). Each input becomes a 來源 and its facts a proposal, never facts in the
@@ -65,8 +67,11 @@ interface Input {
     | { kind: "file"; filename: string; content: string };
   /** A file's passages; a message has none (it is cited whole). */
   chunks: SourceChunk[];
-  /** Drawn from the passage at index `chunk`, or from the message. */
-  facts: { content: string; chunk?: number }[];
+  /**
+   * Drawn from the passage at index `chunk`, or from the message; with the
+   * entities they speak of once linked.
+   */
+  facts: LinkedFact[];
 }
 
 export const InputState = Annotation.Root({
@@ -327,6 +332,7 @@ export const inputGraph = new StateGraph(InputState)
   .addNode("deidentify", deidentify)
   .addNode("chunk", chunk)
   .addNode("extract", extract)
+  .addNode("linkEntities", linkEntities<Input>)
   .addNode("propose", propose)
   .addEdge(START, "toText")
   .addConditionalEdges(
@@ -344,7 +350,8 @@ export const inputGraph = new StateGraph(InputState)
     ({ refusal }) => (refusal ? "propose" : "extract"),
     ["propose", "extract"],
   )
-  .addEdge("extract", "propose")
+  .addEdge("extract", "linkEntities")
+  .addEdge("linkEntities", "propose")
   .addEdge("propose", END)
   .compile();
 
@@ -372,22 +379,3 @@ function refuse(reason: Refusal["reason"], message: string) {
 }
 
 const names = (files: Upload[]) => files.map((f) => f.filename).join("、");
-
-// Like Promise.all over items.map(fn), with at most `limit` calls at once.
-async function mapLimited<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const out = new Array<R>(items.length);
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, async () => {
-      while (next < items.length) {
-        const i = next++;
-        out[i] = await fn(items[i]);
-      }
-    }),
-  );
-  return out;
-}

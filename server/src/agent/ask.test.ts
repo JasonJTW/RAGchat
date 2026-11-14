@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { confirmProposal, propose, rejectProposal } from "../knowledge-base.js";
+import {
+  confirmProposal,
+  propose,
+  type Proposal,
+  rejectProposal,
+} from "../knowledge-base.js";
 import { installStubModels } from "../stub-models.js";
 import { createWorkspace } from "../workspaces.js";
 import { answer, checkSubject, retrieve, type Evidence } from "./ask.js";
+import { linkEntities } from "./link-entities.js";
 
 const FORMULA = "避免排放算法模型是 估算值 A = m × EF × 取代率 R × 壽命比 L";
 const MESSAGE = `請把以下內容輸入到知識庫：${FORMULA}`;
@@ -45,7 +51,7 @@ describe("retrieve", () => {
     expect(similarity).toBeGreaterThan(0.3);
   });
 
-  it("finds no fact of a proposal that is pending or rejected", async () => {
+  it("finds a pending proposal's fact only as 待確認, after the confirmed ones, and no rejected one", async () => {
     installStubModels();
     const workspaceId = await createWorkspace("guest", "test");
     const pending = await propose(workspaceId, "user-a", {
@@ -63,7 +69,57 @@ describe("retrieve", () => {
     );
 
     expect(pending.status).toBe("pending");
-    expect(evidence.filter((e) => e.kind === "fact")).toEqual([]);
+    expect(evidence.filter((e) => e.kind === "fact")).toEqual([
+      expect.objectContaining({
+        text: FORMULA,
+        proposal: expect.objectContaining({ id: pending.id }) as unknown,
+      }),
+    ]);
+  });
+
+  it("puts a 待確認 replacement right after the confirmed fact it would replace, bringing that one in if missing", async () => {
+    const { vectors } = installStubModels();
+    const OLD = "R 代表取代率";
+    const NEW = "R 代表回收率";
+    const OTHERS = ["一", "二", "三", "四", "五", "六"].map(
+      (day) => `週會在每週${day}`,
+    );
+    vectors.set(OLD, [0, 1]);
+    for (const other of OTHERS) vectors.set(other, [1, 0]);
+    vectors.set(NEW, [0.9, 0.1]);
+    vectors.set("R 代表什麼？", [0.3, 0.95]);
+    vectors.set("週會在哪天？", [1, 0]);
+    const workspaceId = await workspaceWith(OLD, ...OTHERS);
+    const [old] = (await retrieve(ask(workspaceId, OLD))).evidence;
+    const correction = await propose(workspaceId, "user-a", {
+      source: { kind: "message", content: "R 不是取代率，是回收率" },
+      facts: [],
+      corrections: [
+        {
+          kind: "supersede",
+          targetFactId: old.id,
+          content: NEW,
+          reason: "改了",
+          effectiveAt: new Date().toISOString(),
+        },
+      ],
+    });
+
+    const found = await retrieve(ask(workspaceId, "R 代表什麼？"));
+    expect(found.evidence.map((e) => e.text).slice(0, 2)).toEqual([OLD, NEW]);
+    expect(found.evidence[1]).toMatchObject({
+      label: expect.stringMatching(/^待確認 · /) as unknown,
+      replaces: old.id,
+      proposal: { id: correction.id },
+    });
+
+    // Six other facts match better: the target is brought in for its rival.
+    const missing = await retrieve(ask(workspaceId, "週會在哪天？"));
+    const texts = missing.evidence.map((e) => e.text);
+    expect(texts.slice(0, 6).sort()).toEqual([...OTHERS].sort());
+    expect(texts.slice(6)).toEqual([OLD, NEW]);
+    expect(missing.evidence[6]).toMatchObject({ id: old.id, kind: "fact" });
+    expect(missing.evidence[6]).not.toHaveProperty("proposal");
   });
 
   it("finds no fact of another workspace", async () => {
@@ -74,6 +130,105 @@ describe("retrieve", () => {
     const { evidence } = await retrieve(ask(other, "避免排放算法怎麼算？"));
 
     expect(evidence.filter((e) => e.kind === "fact")).toEqual([]);
+  });
+});
+
+describe("retrieve through entities", () => {
+  /** Confirms each fact with the entities 「…」 names (the stub linker's way). */
+  async function confirmLinked(workspaceId: string, ...contents: string[]) {
+    const [linked] = (
+      await linkEntities({
+        workspaceId,
+        inputs: [{ facts: contents.map((content) => ({ content })) }],
+      })
+    ).inputs;
+    const proposal = await propose(workspaceId, "user-a", {
+      source: { kind: "message", content: contents.join("\n") },
+      facts: linked.facts,
+    });
+    await confirmProposal(workspaceId, proposal.id, "user-b");
+    return proposal;
+  }
+
+  // Facts that match any question better than the related ones do.
+  const DISTRACTORS = Array.from({ length: 8 }, (_, i) => `週會第 ${i} 項`);
+
+  it("finds the facts of an entity asked about by its alias", async () => {
+    const { chat, vectors } = installStubModels();
+    const question = "減碳計算模型由誰負責？";
+    vectors.set(question, [1, 0]);
+    for (const text of DISTRACTORS) vectors.set(text, [1, 0]);
+    vectors.set("避免排放算法", [0, 1, 0]);
+    vectors.set("減碳計算模型", [0, 0.9, 0.1]);
+    const owner = "「小林」負責「避免排放算法」";
+    vectors.set(owner, [0, 0, 1]);
+    const workspaceId = await createWorkspace("guest", "test");
+    await confirmLinked(workspaceId, owner, ...DISTRACTORS);
+    const structured = chat.structured;
+    chat.structured = (text, name) =>
+      name === "entity-link"
+        ? { links: [{ mention: 1, entity: 1 }] }
+        : structured(text, name);
+    await confirmLinked(workspaceId, "「減碳計算模型」使用壽命比 L");
+
+    const { evidence, similarity } = await retrieve(ask(workspaceId, question));
+
+    expect(evidence.slice(0, 6).map((e) => e.text)).toContain(owner);
+    expect(similarity).toBeGreaterThanOrEqual(0.3);
+  });
+
+  it("finds facts of entities related within two hops, not three", async () => {
+    const { vectors } = installStubModels();
+    const question = "誰負責避免排放算法？";
+    vectors.set(question, [1, 0]);
+    for (const text of DISTRACTORS) vectors.set(text, [1, 0]);
+    const hop0 = "「避免排放算法」屬於「減碳模組」";
+    const hop1 = "「小林」負責「減碳模組」";
+    const hop2 = "「小林」帶領「資料組」";
+    const hop3 = "「資料組」使用「Postgres」";
+    for (const text of [hop0, hop1, hop2, hop3]) vectors.set(text, [0, 1]);
+    const workspaceId = await createWorkspace("guest", "test");
+    await confirmLinked(workspaceId, hop0, hop1, hop2, hop3, ...DISTRACTORS);
+
+    const { evidence } = await retrieve(ask(workspaceId, question));
+
+    const texts = evidence.map((e) => e.text);
+    expect(texts).toEqual(expect.arrayContaining([hop0, hop1, hop2]));
+    expect(texts).not.toContain(hop3);
+  });
+
+  it("walks no relation a fact no longer current states", async () => {
+    const { vectors } = installStubModels();
+    const question = "誰負責避免排放算法？";
+    vectors.set(question, [1, 0]);
+    for (const text of DISTRACTORS) vectors.set(text, [1, 0]);
+    const hop0 = "「避免排放算法」屬於「減碳模組」";
+    const hop1 = "「小林」負責「減碳模組」";
+    for (const text of [hop0, hop1]) vectors.set(text, [0, 1]);
+    const workspaceId = await createWorkspace("guest", "test");
+    const proposal = await confirmLinked(
+      workspaceId,
+      hop0,
+      hop1,
+      ...DISTRACTORS,
+    );
+    const ended = await propose(workspaceId, "user-a", {
+      source: { kind: "message", content: "過時" },
+      facts: [],
+      corrections: [
+        {
+          kind: "obsolete",
+          targetFactId: proposal.items[0].factId!,
+          reason: "過時",
+          effectiveAt: new Date().toISOString(),
+        },
+      ],
+    });
+    await confirmProposal(workspaceId, ended.id, "user-b");
+
+    const { evidence } = await retrieve(ask(workspaceId, question));
+
+    expect(evidence.map((e) => e.text)).not.toContain(hop1);
   });
 });
 
@@ -156,6 +311,41 @@ describe("answer", () => {
     evidence: [fact],
     similarity: 0.8,
   };
+
+  it("notes a correction proposed in the same turn is pending, also when it refuses", async () => {
+    installStubModels();
+    const proposal = { id: "p1" } as Proposal;
+
+    const answered = await answer({ ...state, proposal });
+    const refused = await answer({ ...state, similarity: 0, proposal });
+
+    for (const { reply } of [answered, refused])
+      expect(reply).toMatch(/你剛提出的修正還待確認[^\n]*$/);
+    expect(refused.reply).toContain("知識庫裡沒有這件事的資料");
+  });
+
+  it("cites a 待確認 fact together with the confirmed one it would replace, the confirmed first", async () => {
+    const { chat } = installStubModels();
+    chat.reply = "待確認的說法是回收率。[2]";
+    const pending: Evidence = {
+      ...fact,
+      id: "f2",
+      label: "待確認 · 2026-11-14",
+      text: "R 是回收率",
+      proposal: { id: "p1" } as Proposal,
+      replaces: "f1",
+    };
+
+    const { citations } = await answer({
+      ...state,
+      evidence: [fact, pending],
+    });
+
+    expect(citations.map((c) => [c.id, c.marker])).toEqual([
+      ["f1", 1],
+      ["f2", 2],
+    ]);
+  });
 
   it("answers from the evidence, citing what the answer marks", async () => {
     const { chat } = installStubModels();

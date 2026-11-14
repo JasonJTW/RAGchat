@@ -6,6 +6,7 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
@@ -242,6 +243,115 @@ export const conversations = pgTable(
       table.userId,
       table.updatedAt,
     ),
+  ],
+);
+
+/**
+ * 實體: what facts speak of, e.g. a person, a feature, an algorithm. One
+ * thing has one entity in a workspace; its other names are its aliases. It
+ * lives while a pending or confirmed fact is linked to it, and is new (shown
+ * as such on a proposal card) until a confirmed one is.
+ */
+export const entities = pgTable(
+  "entities",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: workspaceId(),
+    name: text("name").notNull(),
+    /** person, project, feature, method, module, organization, document, other. */
+    kind: text("kind").notNull(),
+    /** The name's embedding, for finding the entity a new mention means. */
+    embedding: vector("embedding", {
+      dimensions: EMBEDDING_DIMENSIONS,
+    }).notNull(),
+    embeddingModel: text("embedding_model").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("entities_workspace").on(t.workspaceId),
+    index("entities_embedding").using(
+      "hnsw",
+      t.embedding.op("vector_cosine_ops"),
+    ),
+  ],
+);
+
+/** 別名: another name of an entity, e.g. 「減碳計算模型」 for 避免排放算法. */
+export const entityAliases = pgTable(
+  "entity_aliases",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: workspaceId(),
+    entityId: uuid("entity_id")
+      .notNull()
+      .references(() => entities.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    embedding: vector("embedding", {
+      dimensions: EMBEDDING_DIMENSIONS,
+    }).notNull(),
+    embeddingModel: text("embedding_model").notNull(),
+    /**
+     * The fact whose mention gave the alias: the alias lives while that fact
+     * is pending or confirmed.
+     */
+    factId: uuid("fact_id")
+      .notNull()
+      .references(() => facts.id, { onDelete: "cascade" }),
+  },
+  (t) => [
+    index("entity_aliases_entity").on(t.entityId),
+    index("entity_aliases_embedding").using(
+      "hnsw",
+      t.embedding.op("vector_cosine_ops"),
+    ),
+  ],
+);
+
+/** The entities a fact speaks of. */
+export const factEntities = pgTable(
+  "fact_entities",
+  {
+    workspaceId: workspaceId(),
+    factId: uuid("fact_id")
+      .notNull()
+      .references(() => facts.id, { onDelete: "cascade" }),
+    entityId: uuid("entity_id")
+      .notNull()
+      .references(() => entities.id, { onDelete: "cascade" }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.factId, t.entityId] }),
+    index("fact_entities_entity").on(t.entityId),
+  ],
+);
+
+/**
+ * A relation between two entities that a fact states, e.g. 小林 負責
+ * 避免排放算法. It holds while its fact does: its validity is the fact's
+ * (`valid_from`, `valid_to`, status), never a copy.
+ */
+export const edges = pgTable(
+  "edges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: workspaceId(),
+    fromEntityId: uuid("from_entity_id")
+      .notNull()
+      .references(() => entities.id, { onDelete: "cascade" }),
+    toEntityId: uuid("to_entity_id")
+      .notNull()
+      .references(() => entities.id, { onDelete: "cascade" }),
+    relation: text("relation").notNull(),
+    factId: uuid("fact_id")
+      .notNull()
+      .references(() => facts.id, { onDelete: "cascade" }),
+  },
+  (t) => [
+    index("edges_from").on(t.fromEntityId),
+    index("edges_to").on(t.toEntityId),
+    index("edges_fact").on(t.factId),
   ],
 );
 

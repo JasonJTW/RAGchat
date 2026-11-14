@@ -193,8 +193,12 @@ const confirmBody = z
       .default([]),
     excluded: z.array(z.string()).max(1000).default([]),
     acknowledged: z.array(z.string().max(100)).max(500).default([]),
+    relinks: z
+      .array(z.object({ entityId: z.string(), to: z.string() }))
+      .max(200)
+      .default([]),
   })
-  .default({ edits: [], excluded: [], acknowledged: [] });
+  .default({ edits: [], excluded: [], acknowledged: [], relinks: [] });
 
 // Confirming is the one way facts enter the knowledge base; no model is
 // involved (ADR-0003).
@@ -235,7 +239,7 @@ app.post("/api/proposals/:id/reject", async (req, res) => {
 });
 
 const INVALID_EDIT =
-  "edits and excluded must name items of this proposal, edits each with a text of 1 to 2000 characters, and at least one item must stay ticked";
+  "edits and excluded must name items of this proposal, edits each with a text of 1 to 2000 characters, and at least one item must stay ticked; relinks must relink a new entity of this proposal to another live entity";
 
 function sendDecision(
   res: express.Response,

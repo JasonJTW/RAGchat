@@ -15,16 +15,25 @@ export const DEFAULT_DATABASE_URL =
 
 const MIGRATIONS = fileURLToPath(new URL("../drizzle/", import.meta.url));
 
-const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL || DEFAULT_DATABASE_URL,
-});
+declare global {
+  var RAGCHAT_POOL: { url: string; pool: pg.Pool } | undefined;
+}
 
-// An idle connection that drops (e.g. Postgres restarts, or a test run drops
-// its database) is replaced on the next query; without a listener it would
-// crash the server.
-pool.on("error", (error) => {
-  console.error("database connection lost:", error.message);
-});
+// One pool per database URL in the process, kept on globalThis: a test that
+// re-imports this module (vi.resetModules) reuses it instead of opening
+// another pool's connections.
+const url = process.env.DATABASE_URL || DEFAULT_DATABASE_URL;
+if (globalThis.RAGCHAT_POOL?.url !== url) {
+  const created = new pg.Pool({ connectionString: url });
+  // An idle connection that drops (e.g. Postgres restarts, or a test run
+  // drops its database) is replaced on the next query; without a listener it
+  // would crash the server.
+  created.on("error", (error) => {
+    console.error("database connection lost:", error.message);
+  });
+  globalThis.RAGCHAT_POOL = { url, pool: created };
+}
+const pool = globalThis.RAGCHAT_POOL.pool;
 
 export const db = drizzle(pool, { schema });
 
@@ -35,5 +44,7 @@ export function migrate(database: typeof db = db): Promise<void> {
 
 /** Closes the pool, so a script or test run can exit. */
 export function closeDb(): Promise<void> {
+  if (globalThis.RAGCHAT_POOL?.pool === pool)
+    globalThis.RAGCHAT_POOL = undefined;
   return pool.end();
 }

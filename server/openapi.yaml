@@ -104,12 +104,26 @@ paths:
         how many. When no fact is meant, the reply says it found none and proposes
         nothing. Nothing changes until the proposal is confirmed.
 
+        A message ending in a question whose preceding sentences correct
+        (e.g. 「R 已經改成回收率了，那現在 A 怎麼算？」) does both: the part
+        before the question is the correction, proposed as above, and the
+        whole message is then answered as a question from the facts as they
+        were before the correction (it is pending), the answer text ending
+        with a note that the correction just proposed is 待確認. A clause
+        that itself asks (什麼, 嗎, 哪, 怎麼, …) does not correct, so
+        「R 改成什麼了？」 is only a question.
+
         Any other message is a question, answered from the workspace's
         current confirmed facts (the 6 nearest by embedding cosine) and the
         passages of its file 來源 with a confirmed proposal (the 2 best by
         embedding cosine and pg_trgm keyword similarity, merged by reciprocal
         rank fusion), merged by cosine similarity. A pending or rejected
-        file's passages are never answered from.
+        file's passages are never answered from. Then up to 3 待確認 facts
+        (of live items of pending proposals) with cosine ≥ 0.3 follow. A
+        待確認 fact that would replace a confirmed one comes right after it
+        (the confirmed one added if missing), and the two are cited together,
+        the confirmed one first; a 待確認 citation carries its `proposal` so
+        it can be confirmed from the answer.
         When earlier messages are sent, the latest one is first rewritten
         into a standalone question for retrieval, and the answer sees the
         whole conversation. The client sends the whole conversation each
@@ -122,8 +136,8 @@ paths:
         a subject it never names. If it does, the reply is the fixed sentence
         「請問你指的是哪個計畫或主題？」 with no citations; on a Jev failure,
         timeout or no JEV_API_KEY the question is answered as usual. The
-        check is skipped, by rule, for a message with a `file` part and for
-        one with an input keyword (輸入, 記下, 記錄, 記住, 寫入, 存入, 存進,
+        check is skipped, by rule, for a message with a `file` part, one that
+        also corrects, and one with an input keyword (輸入, 記下, 記錄, 記住, 寫入, 存入, 存進,
         新增, 加入, 更新, 補充, 更正, 修正, 改成, 改為).
         Streams the answer as an AI SDK UI message stream (Server-Sent Events).
         After the text, each fact or passage the answer marks with `[n]`
@@ -304,11 +318,19 @@ paths:
         place (the item's `target` then names it); when that chain ended in
         過時, a 過時 does nothing and a 取代's fact follows it. Confirming
         expires the pending items of older proposals that change the same
-        fact or make the same claim (cosine at least 0.9) as one of its
-        items: their `expiredBy` is this proposal and their facts never
+        fact or make the same claim about the same entity (cosine at least
+        0.9, and a common entity unless one side speaks of none) as one of
+        its items: their `expiredBy` is this proposal and their facts never
         enter the knowledge base; an older proposal with no live item left
         becomes `expired`. Confirmations of a workspace run one at a time,
         so of two rival proposals confirmed at once only one succeeds.
+
+
+        Each of `relinks` makes a new entity of the ticked items' facts
+        (see `Proposal.entities`, `new`) the existing entity the member
+        chose instead: those facts speak of it, their relations join it, and
+        the new entity's name becomes its 別名 (alias), so a question by
+        either name finds them.
       parameters:
         - $ref: "#/components/parameters/ProposalId"
       requestBody:
@@ -350,6 +372,25 @@ paths:
                   items:
                     type: string
                     format: uuid
+                relinks:
+                  type: array
+                  maxItems: 200
+                  description: >
+                    New entities of this proposal to relink to existing ones
+                  items:
+                    type: object
+                    required: [entityId, to]
+                    properties:
+                      entityId:
+                        type: string
+                        format: uuid
+                        description: A new entity of this proposal (`new` true), once each
+                      to:
+                        type: string
+                        format: uuid
+                        description: >
+                          Another live entity of the workspace, e.g. one of
+                          the entity's `candidates`
       responses:
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -364,8 +405,9 @@ paths:
         "400":
           description: >
             An edit or an excluded id names no item of this proposal, an
-            edit's text is blank or longer than 2000 characters, or every
-            item is excluded; nothing is decided
+            edit's text is blank or longer than 2000 characters, every
+            item is excluded, or a relink names no new entity of this
+            proposal or no other live entity; nothing is decided
           content:
             application/json:
               schema:
@@ -730,10 +772,10 @@ components:
         kind:
           type: string
           enum: [fact, passage]
-          description: A confirmed fact of the knowledge base, or a passage of a confirmed file 來源
+          description: A fact (confirmed, or 待確認 when `proposal` is present), or a passage of a confirmed file 來源
         label:
           type: string
-          description: "A fact's is `知識庫 · <valid from, YYYY-MM-DD in Taiwan>`; a passage's e.g. `05-projects-and-practice.md › 05 實踐案例 … › C. 移動微型空間計畫`, `04-founder-hsiao-yu-chih.pdf › 第 2 頁`, `faq.txt › Q: 網站有英文版嗎？`"
+          description: "A confirmed fact's is `知識庫 · <valid from, YYYY-MM-DD in Taiwan>`, a 待確認 fact's `待確認 · <valid from>`; a passage's e.g. `05-projects-and-practice.md › 05 實踐案例 … › C. 移動微型空間計畫`, `04-founder-hsiao-yu-chih.pdf › 第 2 頁`, `faq.txt › Q: 網站有英文版嗎？`"
         text:
           type: string
           description: The fact, or the passage's original text
@@ -762,12 +804,23 @@ components:
               format: date-time
             label:
               type: string
+        proposal:
+          $ref: "#/components/schemas/Proposal"
+          description: >
+            Present when the fact is 待確認: the pending 提案 it belongs to,
+            as its card shows it, so a member can confirm it from the answer
+            (POST /api/proposals/{id}/confirm)
+        replaces:
+          type: string
+          description: >
+            A 待確認 fact's: the confirmed fact it would replace (取代). The
+            two are cited together, the confirmed one first.
     Proposal:
       type: object
       description: >
         A 提案: changes to the knowledge base waiting for a member. While
         `pending`, its facts are not in the knowledge base.
-      required: [id, status, createdBy, createdAt, items]
+      required: [id, status, createdBy, createdAt, items, entities]
       properties:
         id:
           type: string
@@ -809,6 +862,11 @@ components:
                 description: Its fact, or for 過時 the fact it would end
               createdBy:
                 type: string
+        entities:
+          type: array
+          description: The 實體 its items' facts speak of
+          items:
+            $ref: "#/components/schemas/ProposalEntity"
         items:
           type: array
           description: 取代 and 過時 items first, then 新增 ones
@@ -869,6 +927,54 @@ components:
                 description: >
                   The newer proposal whose confirmation expired the item
                   (已過期); it is then never confirmed
+              entityIds:
+                type: array
+                description: The entities its fact speaks of (ids in `entities`)
+                items:
+                  type: string
+                  format: uuid
+    ProposalEntity:
+      type: object
+      description: >
+        A 實體 a proposal's facts speak of. New until a confirmed fact speaks
+        of it: [連結實體] found no existing entity it means.
+      required: [id, name, kind, new]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        kind:
+          type: string
+          enum:
+            [
+              person,
+              project,
+              feature,
+              method,
+              module,
+              organization,
+              document,
+              other,
+            ]
+        new:
+          type: boolean
+          description: No confirmed fact speaks of it yet
+        candidates:
+          type: array
+          description: >
+            For a new entity of a pending proposal: existing entities with
+            alike names, most alike first, to relink it to on confirm
+          items:
+            type: object
+            required: [id, name]
+            properties:
+              id:
+                type: string
+                format: uuid
+              name:
+                type: string
     Conflict:
       type: object
       description: >
