@@ -219,7 +219,7 @@ export async function markTerm(
   const value = term.trim();
   if (sensitive) {
     await unmarkExcluded(workspaceId, value);
-    await pseudonymsFor(workspaceId, [{ value, kind: "敏感詞" }]);
+    await pseudonymsFor(workspaceId, [{ value, kind: SENSITIVE_KIND }]);
   } else {
     await db
       .insert(excludedTerms)
@@ -241,6 +241,86 @@ export async function unmarkExcluded(
         eq(excludedTerms.term, term.trim()),
       ),
     );
+}
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+// The kind of a term a 成員 marked 敏感.
+const SENSITIVE_KIND = "敏感詞";
+// Tables that hold no pseudonymised text.
+const NO_PSEUDONYMS = ["pseudonyms", "excluded_terms", "deletions"];
+
+/**
+ * Deletes the pseudonyms in the texts that no row of the workspace uses any
+ * more, e.g. after a 來源 holding them was hard-deleted in this transaction.
+ * 敏感詞 a 成員 marked stay. Searches every text column of every workspace
+ * table, so a new table is covered without a change here.
+ */
+export async function forgetUnused(
+  tx: Tx,
+  workspaceId: string,
+  texts: string[],
+) {
+  const candidates = [
+    ...new Set(texts.flatMap((text) => text.match(PSEUDONYM) ?? [])),
+  ];
+  if (candidates.length === 0) return;
+  // Taken as pseudonymize takes it, so no new text gets one mid-check.
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(hashtext(${`pseudonyms:${workspaceId}`}))`,
+  );
+  const { rows: columns } = await tx.execute<{
+    table_name: string;
+    column_name: string;
+  }>(sql`
+    select c.table_name, c.column_name from information_schema.columns c
+    where c.table_schema = current_schema()
+      and c.data_type in ('text', 'jsonb', 'ARRAY')
+      and c.table_name not in (${sql.join(
+        NO_PSEUDONYMS.map((t) => sql`${t}`),
+        sql`, `,
+      )})
+      and exists (
+        select 1 from information_schema.columns w
+        where w.table_schema = c.table_schema and w.table_name = c.table_name
+          and w.column_name = 'workspace_id'
+      )
+  `);
+  const byTable = new Map<string, string[]>();
+  for (const c of columns)
+    byTable.set(c.table_name, [
+      ...(byTable.get(c.table_name) ?? []),
+      c.column_name,
+    ]);
+  const list = sql`array[${sql.join(
+    candidates.map((p) => sql`${p}`),
+    sql`, `,
+  )}]::text[]`;
+  const used = new Set<string>();
+  for (const [table, cols] of byTable) {
+    const { rows } = await tx.execute<{ p: string }>(sql`
+      select c.p from unnest(${list}) c(p) where exists (
+        select 1 from ${sql.identifier(table)} t
+        where t.workspace_id = ${workspaceId} and (${sql.join(
+          cols.map(
+            (col) => sql`strpos(t.${sql.identifier(col)}::text, c.p) > 0`,
+          ),
+          sql` or `,
+        )})
+      )
+    `);
+    for (const row of rows) used.add(row.p);
+  }
+  const unused = candidates.filter((p) => !used.has(p));
+  if (unused.length)
+    await tx.execute(sql`
+      delete from pseudonyms
+      where workspace_id = ${workspaceId} and kind <> ${SENSITIVE_KIND}
+        and pseudonym in (${sql.join(
+          unused.map((p) => sql`${p}`),
+          sql`, `,
+        )})
+    `);
 }
 
 // --- Finding what to replace ---

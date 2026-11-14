@@ -42,6 +42,8 @@ export interface Proposal {
   id: string;
   /** expired: a newer proposal's confirmation expired every item. */
   status: "pending" | "confirmed" | "rejected" | "expired";
+  /** Its 來源 (absent on cards saved before hard delete). */
+  sourceId?: string;
   createdBy: string;
   createdAt: string;
   /** Who confirmed or rejected it. */

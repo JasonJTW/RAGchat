@@ -137,3 +137,42 @@ function withoutFileData<P extends { type: string }>(part: P) {
   };
   return { type: "file", filename, mediaType };
 }
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Drops from the workspace's conversations every data part (proposal card,
+ * citation) that mentions one of the ids, e.g. of a hard-deleted 來源's
+ * facts. Their text parts stay as the member read them.
+ */
+export async function forgetParts(tx: Tx, workspaceId: string, ids: string[]) {
+  if (ids.length === 0) return;
+  const rows = await tx
+    .select({ id: conversations.id, messages: conversations.messages })
+    .from(conversations)
+    .where(
+      and(
+        eq(conversations.workspaceId, workspaceId),
+        sql`${conversations.messages}::text ~ ${ids.join("|")}`,
+      ),
+    )
+    .for("update");
+  const mentions = (part: unknown) => {
+    const json = JSON.stringify(part);
+    return ids.some((id) => json.includes(id));
+  };
+  for (const row of rows) {
+    const messages = (row.messages as { parts?: { type?: string }[] }[]).map(
+      (message) => ({
+        ...message,
+        parts: (message.parts ?? []).filter(
+          (part) => !(part.type?.startsWith("data-") && mentions(part)),
+        ),
+      }),
+    );
+    await tx
+      .update(conversations)
+      .set({ messages })
+      .where(eq(conversations.id, row.id));
+  }
+}

@@ -5,6 +5,8 @@ Knowledge-base chatbot POC for megaweaving (大量交織). Users ask questions i
 - Chat: `http://localhost:3000/` (sign in with Clerk; only members of the MegaWeaving Organization get in)
 - Files: attach `.md`, `.txt`, `.pdf` or `.docx` to a chat message (「附加檔案」), or `POST /api/sources`; each file becomes a 來源 and a 提案 to confirm
 
+Production (Docker Compose on Ubuntu behind Cloudflare Tunnel, daily backups, restore): [`docs/deploy.md`](docs/deploy.md).
+
 Spec and acceptance criteria: `.scratch/kb-chatbot/spec.md`; tickets: `.scratch/kb-chatbot/issues/`.
 
 ## Features
