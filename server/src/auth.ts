@@ -2,7 +2,7 @@ import { clerkClient, clerkMiddleware, getAuth } from "@clerk/express";
 import type { Request, RequestHandler } from "express";
 import { stubIdentity } from "./stub-auth.js";
 
-// Who signed in, through Clerk (ADR: spec #22 存取). Members of the MegaWeaving
+// Who signed in, through Clerk (ADR-0005). Members of the MegaWeaving
 // Organization (CLERK_MEMBER_ORG_ID) are 成員; every other signed-in user is a
 // 訪客. Without CLERK_SECRET_KEY nobody is signed in, unless stub sign-in is on.
 
