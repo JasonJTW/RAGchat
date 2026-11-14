@@ -69,7 +69,8 @@ test("another 成員 is not offered to delete someone's 來源", async ({
   const theirs = page
     .getByRole("region", { name: "提案" })
     .filter({ hasText: fact });
-  await expect(theirs).toContainText("user_e2e_other 提出");
+  await expect(theirs).toContainText("e2e_other 提出");
+  await expect(theirs).not.toContainText("user_e2e_other");
   await expect(theirs.getByText("刪除來源")).toHaveCount(0);
 
   // The uploader deletes it, so later specs see no pending proposal of it.

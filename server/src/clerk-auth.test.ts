@@ -9,12 +9,38 @@ const clerk = vi.hoisted(() => ({
   members: new Set<string>(),
   lookups: 0,
   down: false,
+  users: new Map<
+    string,
+    { firstName?: string; lastName?: string; username?: string }
+  >(),
+  userLookups: 0,
 }));
 vi.mock("@clerk/express", () => ({
   clerkMiddleware: () => (_req: unknown, _res: unknown, next: () => void) =>
     next(),
   getAuth: () => clerk.auth,
   clerkClient: {
+    users: {
+      getUserList: ({ userId }: { userId: string[] }) => {
+        clerk.userLookups++;
+        if (clerk.down) return Promise.reject(new Error("Clerk is down"));
+        return Promise.resolve({
+          data: userId.flatMap((id) => {
+            const user = clerk.users.get(id);
+            return user
+              ? [
+                  {
+                    id,
+                    firstName: user.firstName ?? null,
+                    lastName: user.lastName ?? null,
+                    username: user.username ?? null,
+                  },
+                ]
+              : [];
+          }),
+        });
+      },
+    },
     organizations: {
       getOrganizationMembershipList: ({
         organizationId,
@@ -33,7 +59,7 @@ vi.mock("@clerk/express", () => ({
     },
   },
 }));
-const { identify } = await import("./auth.js");
+const { displayNames, identify } = await import("./auth.js");
 const { app } = await import("./app.js");
 
 const req = { headers: {} } as Request;
@@ -107,6 +133,38 @@ describe("identify with Clerk", () => {
     } as Request;
 
     expect(await identify(stubbed)).toBeNull();
+  });
+});
+
+describe("displayNames with Clerk", () => {
+  it("names each user as Clerk does, once per user for a while", async () => {
+    clerk.users.set("user_n1", { firstName: "小樹", lastName: "林" });
+    clerk.users.set("user_n2", { username: "leaf" });
+    const before = clerk.userLookups;
+
+    expect(await displayNames(["user_n1", "user_n2", "示範資料"])).toEqual({
+      user_n1: "林小樹",
+      user_n2: "leaf",
+      示範資料: "示範資料",
+    });
+    await displayNames(["user_n1", "user_n2"]);
+    expect(clerk.userLookups).toBe(before + 1);
+  });
+
+  it("names a user Clerk has no name for, or no record of, without their id", async () => {
+    clerk.users.set("user_n3", {});
+
+    expect(await displayNames(["user_n3", "user_gone"])).toEqual({
+      user_n3: "（未命名）",
+      user_gone: "（已刪除的使用者）",
+    });
+  });
+
+  it("falls back to the ids while Clerk can't be reached", async () => {
+    clerk.down = true;
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    expect(await displayNames(["user_n4"])).toEqual({ user_n4: "user_n4" });
   });
 });
 

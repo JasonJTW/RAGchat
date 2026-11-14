@@ -88,3 +88,67 @@ async function isMember(
   memberships.set(key, { member, until: Date.now() + MEMBERSHIP_TTL_MS });
   return member;
 }
+
+// Names are looked up at Clerk and kept for ten minutes.
+const NAME_TTL_MS = 10 * 60_000;
+const names = new Map<string, { name: string; until: number }>();
+
+/**
+ * What to show for each user id (who proposed, confirmed or edited): the
+ * name Clerk has for the user. An id that is not a Clerk user's (the
+ * 示範資料's「示範資料」) is shown as it is; under stub sign-in, an id
+ * without its `user_` prefix. While Clerk can't be reached, the ids.
+ */
+export async function displayNames(
+  userIds: string[],
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const now = Date.now();
+  const ask: string[] = [];
+  for (const id of new Set(userIds)) {
+    const cached = names.get(id);
+    if (!id.startsWith("user_")) out[id] = id;
+    else if (stubAuth()) out[id] = id.slice("user_".length);
+    else if (cached && cached.until > now) out[id] = cached.name;
+    else ask.push(id);
+  }
+  if (!ask.length) return out;
+  if (!process.env.CLERK_SECRET_KEY) {
+    for (const id of ask) out[id] = id;
+    return out;
+  }
+  try {
+    const { data } = await clerkClient.users.getUserList({
+      userId: ask,
+      limit: ask.length,
+    });
+    const found = new Map(data.map((user) => [user.id, user]));
+    for (const id of ask) {
+      const user = found.get(id);
+      const name = user ? nameOf(user) : "（已刪除的使用者）";
+      names.set(id, { name, until: now + NAME_TTL_MS });
+      out[id] = name;
+    }
+  } catch (error) {
+    console.error("display names unavailable:", error);
+    for (const id of ask) out[id] = id;
+  }
+  return out;
+}
+
+// A Chinese name family name first, unspaced (林小樹); else "First Last";
+// else the username.
+function nameOf(user: {
+  firstName: string | null;
+  lastName: string | null;
+  username: string | null;
+}): string {
+  const first = user.firstName?.trim() ?? "";
+  const last = user.lastName?.trim() ?? "";
+  const cjk = /^[㐀-鿿]+$/;
+  if (first && last)
+    return cjk.test(first) && cjk.test(last)
+      ? `${last}${first}`
+      : `${first} ${last}`;
+  return first || last || user.username?.trim() || "（未命名）";
+}

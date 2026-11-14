@@ -6,6 +6,7 @@ import { useRef, useState } from "react";
 import { useDraft } from "@/components/chat-draft";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Person } from "@/components/person";
 import { ProposalCard } from "@/components/proposal-card";
 import type { ChatMessage, HistoryEntry } from "@/lib/chat-message";
 import { teamDate } from "@/lib/team-date";
@@ -234,7 +235,7 @@ function Citations({ message }: { message: ChatMessage }) {
               {citation.edited && (
                 <figure className="mt-1">
                   <figcaption className="text-xs">
-                    經 {citation.edited.by} 編輯，原始抽取：
+                    經 <Person id={citation.edited.by} /> 編輯，原始抽取：
                   </figcaption>
                   <blockquote className="border-l-2 pl-2 whitespace-pre-wrap">
                     {citation.edited.originalContent}

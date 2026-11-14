@@ -76,7 +76,9 @@ test("an item edited on the card is confirmed as edited, and answers cite the ed
     .filter({ hasText: edited });
   await citation.locator("summary").click();
   await expect(citation.getByText(edited, { exact: true })).toBeVisible();
-  await expect(citation).toContainText("經 user_e2e_member 編輯");
+  // Named, not by Clerk id (stub sign-in names a user by the id without user_).
+  await expect(citation).toContainText("經 e2e_member 編輯");
+  await expect(citation).not.toContainText("user_e2e_member");
   await expect(citation.getByText(extracted, { exact: true })).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("cited-edited.png") });
 });

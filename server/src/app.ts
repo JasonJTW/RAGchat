@@ -9,7 +9,8 @@ import path from "node:path";
 import cors from "cors";
 import multer from "multer";
 import { z } from "zod";
-import { authentication, identify } from "./auth.js";
+import { authentication, displayNames, identify } from "./auth.js";
+import { DEMO_USER } from "./demo-seed.js";
 import { inputFiles, MAX_FILE_BYTES } from "./agent/input.js";
 import { attachedFiles, streamReply } from "./chat.js";
 import {
@@ -149,6 +150,7 @@ app.use(
     "/api/sources",
     "/api/trial/reset",
     "/api/terms",
+    "/api/people",
   ],
   requireCaller,
 );
@@ -324,6 +326,25 @@ const confirmBody = z
 
 // Confirming is the one way facts enter the knowledge base; no model is
 // involved (ADR-0003).
+// What to show for user ids (who proposed, confirmed, edited): their names.
+// A 訪客 is told only their own and the 示範資料's; the trial shows no one
+// else.
+app.get("/api/people", async (req, res) => {
+  const ids =
+    typeof req.query.ids === "string"
+      ? req.query.ids.split(",").filter(Boolean)
+      : [];
+  if (!ids.length || ids.length > 100 || ids.some((id) => id.length > 100)) {
+    res.status(400).json({ error: "ids: 1 to 100 comma-separated user ids" });
+    return;
+  }
+  const { role, userId } = callerIn(res);
+  const allowed = policyOf(role).trial
+    ? ids.filter((id) => id === userId || id === DEMO_USER)
+    : ids;
+  res.json(await displayNames(allowed));
+});
+
 // A proposal as it stands now, e.g. for a card in a reopened conversation.
 app.get("/api/proposals/:id", async (req, res) => {
   const proposal = await proposalOf(callerIn(res).workspaceId, req.params.id);

@@ -712,6 +712,43 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/people:
+    get:
+      operationId: getDisplayNames
+      summary: Names to show for user ids
+      description: >
+        What to show for the user ids on cards and citations (who proposed,
+        confirmed or edited): the name Clerk has for each, cached for ten
+        minutes. An id that is not a Clerk user's (「示範資料」) is shown as
+        it is; one Clerk has no record of as （已刪除的使用者）; while Clerk
+        can't be reached, the ids themselves. A 訪客 is told only their own
+        name and the 示範資料's; other ids are left out.
+      parameters:
+        - name: ids
+          in: query
+          required: true
+          description: 1 to 100 user ids, comma-separated
+          schema:
+            type: string
+      responses:
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NotAMember"
+        "400":
+          description: No ids, or more than 100
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "200":
+          description: Each id the caller may see, with its name
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: string
   /api/terms:
     get:
       operationId: listTerms

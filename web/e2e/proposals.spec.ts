@@ -44,7 +44,8 @@ test("a 成員 confirms, from the 待確認 list, a proposal another member made
   const card = page
     .getByRole("region", { name: "提案" })
     .filter({ hasText: fact });
-  await expect(card).toContainText("user_e2e_other 提出");
+  await expect(card).toContainText("e2e_other 提出");
+  await expect(card).not.toContainText("user_e2e_other");
   await page.screenshot({ path: test.info().outputPath("pending-list.png") });
   await confirmOn(card);
 

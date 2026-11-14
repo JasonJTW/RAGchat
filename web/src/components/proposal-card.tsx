@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Person } from "@/components/person";
 import { TermMarker } from "@/components/term-marker";
 import { useUserId } from "@/components/workspace-gate";
 import type { Conflict, Proposal, ProposalEntity } from "@/lib/chat-message";
@@ -259,7 +260,7 @@ function LiveCard({
           })
           .join("、")}
         <span className="ml-2 text-xs text-zinc-500">
-          {decided.createdBy} 提出
+          <Person id={decided.createdBy} /> 提出
         </span>
       </h2>
       {changes.length > 0 && (
@@ -317,7 +318,7 @@ function LiveCard({
               <li key={item.itemId}>
                 {item.content}
                 <span className="ml-2 text-xs text-zinc-500">
-                  {item.createdBy} 提出
+                  <Person id={item.createdBy} /> 提出
                 </span>
               </li>
             ))}
@@ -342,7 +343,7 @@ function LiveCard({
                 {c.after && <Labelled label="變更後">{c.after}</Labelled>}
                 {!c.after && <Labelled label="變更後">過時</Labelled>}
                 <span className="text-xs text-zinc-500">
-                  {c.decidedBy} 確認 · {teamDate(c.decidedAt)}
+                  <Person id={c.decidedBy} /> 確認 · {teamDate(c.decidedAt)}
                 </span>
               </li>
             ))}
@@ -486,7 +487,7 @@ function ItemRow({
               {item.content}
               {item.edited && (
                 <span className="ml-2 text-xs text-zinc-500">
-                  經 {item.edited.by} 編輯
+                  經 <Person id={item.edited.by} /> 編輯
                 </span>
               )}
             </Labelled>

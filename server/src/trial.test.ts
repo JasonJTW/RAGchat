@@ -442,6 +442,44 @@ describe("GET /api/trial/example", () => {
   });
 });
 
+describe("GET /api/people", () => {
+  it("names the users a 成員 asks about", async () => {
+    const res = await request(app)
+      .get("/api/people")
+      .query({ ids: "user_lin,示範資料" })
+      .set("Cookie", stubSession("user_trial_member", "member"));
+
+    expect(res.status).toBe(200);
+    // Stub sign-in names a user by their id without `user_`.
+    expect(res.body).toEqual({ user_lin: "lin", 示範資料: "示範資料" });
+  });
+
+  it("names a 訪客 only themselves and the 示範資料", async () => {
+    const userId = newGuest();
+    const guest = await verifiedGuest(userId);
+
+    const res = await guest
+      .get("/api/people")
+      .query({ ids: `${userId},user_lin,示範資料` });
+
+    expect(res.body).toEqual({
+      [userId]: userId.slice("user_".length),
+      示範資料: "示範資料",
+    });
+  });
+
+  it("asks for at least one id and at most 100", async () => {
+    const member = () =>
+      request(app)
+        .get("/api/people")
+        .set("Cookie", stubSession("user_trial_member", "member"));
+
+    expect((await member()).status).toBe(400);
+    const many = Array.from({ length: 101 }, (_, i) => `user_${i}`).join(",");
+    expect((await member().query({ ids: many })).status).toBe(400);
+  });
+});
+
 describe("what a role may do", () => {
   it("holds a 訪客 to the trial: limits, GUEST_MODEL, a trial to reset, no de-identification", () => {
     expect(policyOf("guest")).toEqual({

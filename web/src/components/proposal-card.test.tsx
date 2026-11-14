@@ -4,6 +4,10 @@ import type { Proposal } from "@/lib/chat-message";
 import { ProposalCard } from "./proposal-card";
 import { UserIdContext } from "./workspace-gate";
 
+// Names are fetched apart (person.test.tsx); here a user shows as their id,
+// so each test's fetch sees only the proposal routes.
+vi.mock("./person", () => ({ Person: ({ id }: { id: string }) => id }));
+
 type Item = Proposal["items"][number];
 
 const item = (n: number, kind: Item["kind"] = "add"): Item => ({
