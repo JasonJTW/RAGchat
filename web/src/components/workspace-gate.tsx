@@ -36,6 +36,13 @@ export const RoleContext = createContext<Me["role"]>("member");
 export const useRole = () => useContext(RoleContext);
 
 /**
+ * The user id of whoever the gate let in, for what only one user sees (the
+ * uploader's 刪除來源). Outside a gate, nobody.
+ */
+export const UserIdContext = createContext<string | null>(null);
+export const useUserId = () => useContext(UserIdContext);
+
+/**
  * Shows its children to whoever has a workspace: a 成員 (the team's), or a
  * 訪客 who passed the human check (their 試用工作區, under a banner saying
  * so). A 訪客 who has not is shown the check; a signed-out visitor is sent
@@ -56,7 +63,12 @@ export function WorkspaceGate({ children }: { children: ReactNode }) {
       </p>
     );
   if (!me) return null;
-  if (me.role === "member") return children;
+  if (me.role === "member")
+    return (
+      <UserIdContext.Provider value={me.userId}>
+        {children}
+      </UserIdContext.Provider>
+    );
   if (!me.trial?.verified)
     return (
       <section className="flex flex-col gap-3">
@@ -69,8 +81,10 @@ export function WorkspaceGate({ children }: { children: ReactNode }) {
     );
   return (
     <RoleContext.Provider value="guest">
-      <TrialBanner />
-      {children}
+      <UserIdContext.Provider value={me.userId}>
+        <TrialBanner />
+        {children}
+      </UserIdContext.Provider>
     </RoleContext.Provider>
   );
 }

@@ -142,6 +142,11 @@ const MARKDOWN = [
   "10-discrepancies-open-questions.md",
 ];
 
+// The two sources Q6 is answered from, deleted in step 8.
+const Q6_SOURCES = ["faq.txt", "07-megaweaving-net-platform.md"];
+// Step 3's conversation of each file, by name, for step 8.
+const conversationOf = new Map<string, string>();
+
 const OTHERS = ["04-founder-hsiao-yu-chih.pdf", "faq.txt", "pickup-notice.txt"];
 
 const REFUSAL = "知識庫裡沒有這件事的資料";
@@ -267,6 +272,7 @@ test.describe("demo script @live", () => {
     // One file per message, so no message has over 100 passages.
     for (const name of [...MARKDOWN, ...OTHERS]) {
       await inputAndConfirm(page, name);
+      conversationOf.set(name, page.url());
       note(name, "confirmed");
     }
     await page.screenshot({
@@ -334,8 +340,24 @@ test.describe("demo script @live", () => {
     );
   });
 
-  // Hard-deleting a 來源 comes with ticket #35; until then no step deletes.
-  test.fixme("8. U3 and Q6-after-delete: deleting Q6's sources makes it refused", () => {});
+  test("8. U3 and Q6-after-delete: deleting Q6's sources makes it refused", async ({
+    page,
+  }) => {
+    test.setTimeout(300_000);
+    // Each from its card, in the conversation step 3 attached it in.
+    for (const name of Q6_SOURCES) {
+      const conversation = conversationOf.get(name);
+      expect(conversation, `step 3 attached ${name}`).toMatch(/\?c=/);
+      await page.goto(conversation!);
+      const card = page.getByRole("region", { name: "提案" });
+      await card.getByText("刪除來源").click();
+      await card.getByRole("button", { name: "永久刪除" }).click();
+      await expect(card.getByRole("status")).toHaveText(/來源已刪除/);
+      note(name, "deleted");
+    }
+    await page.screenshot({ path: path.join(EVIDENCE, "U3.png") });
+    await expectRefuses("Q6-after-delete", await ask(page, KEY.Q6.question));
+  });
 
   // Not Demo Script steps: tickets 06b, 12 and 13, run on the same documents.
   test.describe("a first question's subject check", () => {
