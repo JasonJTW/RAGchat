@@ -6,8 +6,11 @@ servers:
   - url: http://localhost:4000
 # Every route but /health needs a Clerk session (the `__session` cookie the
 # web app's sign-in sets, or a bearer session token). Knowledge base routes
-# act in the caller's workspace and answer only 成員: 401 when nobody is
-# signed in, 403 for a 訪客 until guest trials open.
+# act in the caller's workspace: a 成員's is the team workspace, a 訪客's
+# their own 試用工作區 (see /api/trial/verify), never anyone else's. 401 when
+# nobody is signed in, 403 (`code: verify`) for a 訪客 who has not passed
+# the human check today. A 訪客 is answered by GUEST_MODEL and held to the
+# trial's limits (429 / 413, see GuestLimit).
 security:
   - clerkSession: []
   - clerkBearer: []
@@ -30,7 +33,8 @@ paths:
       summary: Who is signed in, and whether they are a 成員 or a 訪客
       description: >
         Members of the MegaWeaving Clerk Organization (`CLERK_MEMBER_ORG_ID`)
-        are `member`; every other signed-in user is a `guest`.
+        are `member`; every other signed-in user is a `guest`, told whether
+        they passed the human check today (`trial.verified`).
       responses:
         "200":
           description: The signed-in user
@@ -40,6 +44,86 @@ paths:
                 $ref: "#/components/schemas/Me"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /api/trial/verify:
+    post:
+      operationId: verifyGuest
+      summary: A 訪客 passes the human check (Cloudflare Turnstile) and gets their 試用工作區
+      description: >
+        The first pass makes the 訪客's 試用工作區 from the 示範資料 (a copy
+        of a template; no model is called). A pass holds for 24 hours; passing
+        again keeps the trial as it is.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+                  description: The Turnstile widget's token
+      responses:
+        "200":
+          description: Passed; the trial workspace is ready
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [verified]
+                properties:
+                  verified:
+                    type: boolean
+                    const: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: The token did not pass, or the caller is a 成員
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/trial/reset:
+    post:
+      operationId: resetTrial
+      summary: Put the 訪客's 試用工作區 back to the 示範資料
+      description: >
+        Deletes the trial's sources, facts, proposals and conversations and
+        copies the 示範資料 in again. A trial with no request for 7 days is
+        deleted; the 訪客 then starts again from the 示範資料.
+      responses:
+        "200":
+          description: Reset
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reset]
+                properties:
+                  reset:
+                    type: boolean
+                    const: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: >
+            The caller is a 成員, or a 訪客 who has not passed the human check
+            today (`code: verify`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/trial/example:
+    get:
+      operationId: getTrialExample
+      summary: The example file a 訪客 uploads to see a 取代 happen
+      responses:
+        "200":
+          description: meeting-2026-11-12.txt
+          content:
+            text/plain:
+              schema:
+                type: string
   /api/chat:
     post:
       operationId: postChat
@@ -175,11 +259,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "413":
-          description: The request body is over 20 MB
+          description: >
+            The request body is over 20 MB; or, for a 訪客, a file is over
+            1 MB (`code: file size`)
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/GuestLimit"
         "404":
           $ref: "#/components/responses/ConversationNotFound"
   /api/conversations:
@@ -451,10 +539,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/GuestLimit"
         "413":
           description: >
-            A file is larger than 5 MiB, or the files have over 100 passages
-            in all
+            A file is larger than 5 MiB (1 MB for a 訪客, `code: file size`),
+            or the files have over 100 passages in all
           content:
             application/json:
               schema:
@@ -512,8 +602,22 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+    GuestLimit:
+      description: >
+        A 訪客 went over the trial's limits, and nothing was counted or
+        done: 30 messages a day (`code: messages`), 5 uploaded files a day,
+        in the chat or by /api/sources (`code: uploads`), or every 訪客's
+        messages and files together reached GUEST_DAILY_CAP (default 1000)
+        and guest trials are paused for the day (`code: paused`). Days are
+        Asia/Taipei. `error` says so in Chinese, for the 訪客 to read.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
     NotAMember:
-      description: The caller is a 訪客, not a 成員 (guest trials are not open yet)
+      description: >
+        The caller is a 訪客 who has not passed the human check today
+        (`code: verify`; see /api/trial/verify)
       content:
         application/json:
           schema:
@@ -557,6 +661,11 @@ components:
       properties:
         error:
           type: string
+        code:
+          type: string
+          description: >
+            Present on 訪客 refusals: verify, messages, uploads, paused,
+            file size
     Citation:
       type: object
       required: [id, marker, kind, label, text]
@@ -782,6 +891,14 @@ components:
         role:
           type: string
           enum: [member, guest]
+        trial:
+          type: object
+          description: A 訪客's only
+          required: [verified]
+          properties:
+            verified:
+              type: boolean
+              description: Passed the human check within the last 24 hours
     Health:
       type: object
       required: [ok]

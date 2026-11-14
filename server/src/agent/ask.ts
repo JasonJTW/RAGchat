@@ -12,7 +12,13 @@ import {
   searchFacts,
 } from "../knowledge-base.js";
 import { chatModel, systemOne } from "../models.js";
-import { type NodeConfig, type State, type Turn, writeText } from "./state.js";
+import {
+  type NodeConfig,
+  purposeOf,
+  type State,
+  type Turn,
+  writeText,
+} from "./state.js";
 
 // The 提問 branch: [Jev 檢查] and [檢索] side by side, then [回答＋引用].
 
@@ -140,10 +146,11 @@ export async function checkSubject(
  * question.
  */
 export async function retrieve(
-  state: Pick<State, "workspaceId" | "turns" | "message">,
+  state: Pick<State, "workspaceId" | "turns" | "message"> &
+    Partial<Pick<State, "role">>,
 ): Promise<Pick<State, "evidence" | "similarity">> {
   const query = state.turns.length
-    ? await standaloneQuestion(state.turns, state.message)
+    ? await standaloneQuestion(state.turns, state.message, state)
     : state.message;
   const [facts, passages] = await Promise.all([
     searchFacts(state.workspaceId, query, FACTS_PER_ANSWER),
@@ -200,7 +207,8 @@ export async function answer(
   state: Pick<
     State,
     "turns" | "message" | "clarify" | "evidence" | "similarity"
-  >,
+  > &
+    Partial<Pick<State, "role">>,
   config: NodeConfig = {},
 ): Promise<Pick<State, "reply" | "citations">> {
   if (state.clarify || state.similarity < MIN_SIMILARITY) {
@@ -208,7 +216,7 @@ export async function answer(
     writeText(config, "answer", text);
     return { reply: text, citations: [] };
   }
-  const stream = await chatModel("answer").stream(
+  const stream = await chatModel(purposeOf(state, "answer")).stream(
     [
       new SystemMessage(SYSTEM_PROMPT),
       ...state.turns.map((turn) =>
@@ -257,8 +265,9 @@ export async function answer(
 async function standaloneQuestion(
   turns: Turn[],
   question: string,
+  caller: Partial<Pick<State, "role">>,
 ): Promise<string> {
-  const { text } = await chatModel("answer").invoke([
+  const { text } = await chatModel(purposeOf(caller, "answer")).invoke([
     new SystemMessage(REWRITE_PROMPT),
     new HumanMessage(
       `對話：\n${turns

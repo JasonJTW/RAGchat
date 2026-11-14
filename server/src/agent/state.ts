@@ -4,6 +4,8 @@ import type { Fact, PendingChange, Proposal } from "../knowledge-base.js";
 import type { Citation, Evidence } from "./ask.js";
 import type { Skipped, Upload } from "./input.js";
 import type { CorrectionDraft } from "./correct.js";
+import type { ModelPurpose } from "../models.js";
+import type { Caller } from "../workspaces.js";
 
 /** What a message asks of the agent. */
 export type Intent = "ask" | "input" | "correct";
@@ -18,6 +20,8 @@ export interface Turn {
 export const AgentState = Annotation.Root({
   workspaceId: Annotation<string>,
   userId: Annotation<string>,
+  /** A 訪客 is answered by GUEST_MODEL (see `purposeOf`). */
+  role: Annotation<Caller["role"]>,
   /** The conversation before the latest message. */
   turns: Annotation<Turn[]>,
   /** The latest user message. */
@@ -73,4 +77,12 @@ export function writeText(config: NodeConfig, id: string, text: string) {
   config.writer?.({ type: "text-start", id });
   config.writer?.({ type: "text-delta", id, delta: text });
   config.writer?.({ type: "text-end", id });
+}
+
+/** The model a node uses for its purpose: GUEST_MODEL for every 訪客 call. */
+export function purposeOf(
+  state: { role?: Caller["role"] },
+  purpose: ModelPurpose,
+): ModelPurpose {
+  return state.role === "guest" ? "guest" : purpose;
 }

@@ -3,6 +3,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type FileUIPart } from "ai";
 import { useRef, useState } from "react";
+import { useDraft } from "@/components/chat-draft";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ProposalCard } from "@/components/proposal-card";
@@ -52,7 +53,7 @@ export function Chat({
   initialMessages: ChatMessage[];
   onSaved: () => void;
 }) {
-  const { messages, sendMessage, status } = useChat<ChatMessage>({
+  const { messages, sendMessage, status, error } = useChat<ChatMessage>({
     id,
     messages: initialMessages,
     transport,
@@ -63,6 +64,17 @@ export function Chat({
   const [fileError, setFileError] = useState("");
   const picker = useRef<HTMLInputElement>(null);
   const busy = status === "submitted" || status === "streaming";
+  // A draft put in from outside (e.g. an example question) fills the box,
+  // once per draft.
+  const { draft } = useDraft();
+  const [taken, setTaken] = useState(draft);
+  if (draft !== taken) {
+    setTaken(draft);
+    if (draft) {
+      setInput(draft.text);
+      setFiles(draft.files);
+    }
+  }
 
   function attach(chosen: File[]) {
     const all = [...files, ...chosen];
@@ -116,6 +128,11 @@ export function Chat({
           ),
         )}
       </div>
+      {error && (
+        <p role="alert" className="text-sm text-red-600">
+          {refusalOf(error)}
+        </p>
+      )}
       <form
         className="flex flex-col gap-2"
         onSubmit={async (e) => {
@@ -230,6 +247,18 @@ function Citations({ message }: { message: ChatMessage }) {
       ))}
     </ul>
   );
+}
+
+// What the server said when it refused the message (e.g. a 訪客 over the
+// day's limit): its JSON `error`, else a generic line.
+function refusalOf(error: Error): string {
+  try {
+    const body = JSON.parse(error.message) as { error?: unknown };
+    if (typeof body.error === "string") return body.error;
+  } catch {
+    // Not the server's JSON.
+  }
+  return "送出失敗，請稍後再試。";
 }
 
 /** The file as a `file` part: a data URL with its name. */

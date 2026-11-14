@@ -57,6 +57,13 @@
       "when": 1794613367354,
       "tag": "0007_tearful_fat_cobra",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794614136167,
+      "tag": "0008_guest_trials",
+      "breakpoints": true
     }
   ]
 }

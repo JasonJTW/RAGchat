@@ -40,18 +40,22 @@ describe("a caller who is not signed in", () => {
 });
 
 describe("a signed-in user outside the MegaWeaving Organization (訪客)", () => {
-  it("gets 403 from every knowledge base API of the team workspace", async () => {
+  it("gets 403 from every knowledge base API until they pass the human check (trial.test.ts)", async () => {
     for (const [name, call] of Object.entries(knowledgeBaseCalls)) {
       const res = await call().set("Cookie", guest);
       expect(res.status, name).toBe(403);
-      expect(res.body).toEqual({ error: "guest trials are not open yet" });
+      expect(res.body).toMatchObject({ code: "verify" });
     }
   });
 
   it("is told by /api/me that they are a guest", async () => {
     const res = await request(app).get("/api/me").set("Cookie", guest);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ userId: "user_guest", role: "guest" });
+    expect(res.body).toEqual({
+      userId: "user_guest",
+      role: "guest",
+      trial: { verified: false },
+    });
   });
 });
 
