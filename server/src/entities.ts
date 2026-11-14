@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "./db.js";
 import { embeddings } from "./models.js";
+import type { Period } from "./periods.js";
 
 // 實體 and 別名: what facts speak of, under every name the team uses, and the
 // relations facts state between them (edges). The knowledge base module
@@ -545,20 +546,27 @@ export const MAX_HOPS = 2;
 /**
  * The current confirmed facts that speak of the given entities or of
  * entities related to them, up to two hops away through relations stated by
- * current confirmed facts; each with the fewest hops it was reached in.
+ * current confirmed facts; each with the fewest hops it was reached in. For
+ * a past period, the facts and relations that held at some time in it.
  */
 export async function graphFacts(
   workspaceId: string,
   seeds: string[],
   limit: number,
+  during?: Period,
 ): Promise<{ factId: string; hops: number }[]> {
   if (!seeds.length) return [];
+  // A relation holds while its fact does: now, or at some time in the period.
+  const held = during
+    ? sql`f.status = 'confirmed' and f.valid_from < ${during.to}
+        and (f.valid_to is null or f.valid_to > ${during.from})`
+    : sql`f.status = 'confirmed' and f.valid_to is null`;
   const { rows } = await db.execute<{ fact_id: string; hops: number }>(sql`
     with recursive current_edges as (
       select ed.from_entity_id a, ed.to_entity_id b from edges ed
       join facts f on f.id = ed.fact_id
       where ed.workspace_id = ${workspaceId}
-        and f.status = 'confirmed' and f.valid_to is null
+        and ${held}
     ), walk (entity_id, hops) as (
       select id, 0 from entities
       where workspace_id = ${workspaceId} and id in (${sql.join(
@@ -576,7 +584,7 @@ export async function graphFacts(
     from reached
     join fact_entities fe on fe.entity_id = reached.entity_id
     join facts f on f.id = fe.fact_id
-    where f.status = 'confirmed' and f.valid_to is null
+    where ${held}
     group by fe.fact_id
     order by hops, fe.fact_id
     limit ${limit}

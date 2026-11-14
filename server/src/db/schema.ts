@@ -149,6 +149,8 @@ export const facts = pgTable(
     index("facts_workspace_status").on(t.workspaceId, t.status),
     index("facts_superseded_by").on(t.supersededBy),
     index("facts_embedding").using("hnsw", t.embedding.op("vector_cosine_ops")),
+    index("facts_content_trgm").using("gin", t.content.op("gin_trgm_ops")),
+    index("facts_validity").on(t.workspaceId, t.validFrom, t.validTo),
   ],
 );
 
