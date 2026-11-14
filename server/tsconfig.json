@@ -13,6 +13,8 @@
     "vitest.config.ts",
     "vitest.setup.ts",
     "vitest.global-setup.ts",
+    "vitest.live.config.ts",
+    "vitest.live.setup.ts",
     "drizzle.config.ts"
   ]
 }

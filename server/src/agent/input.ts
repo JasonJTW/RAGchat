@@ -252,10 +252,27 @@ function validFromOf(date: string | null | undefined, now: Date) {
   return new Date(Math.min(at, now.getTime())).toISOString();
 }
 
+// A file's own date: the first date in its name, else in its opening
+// (「最後更新 2026-03-02」「日期：2026-05-14」), as YYYY-MM-DD.
+const DATE =
+  /(\d{4})(?:[-/.](\d{1,2})[-/.](\d{1,2})|\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日)/;
+
+function dateOf(source: Input["source"]): string | undefined {
+  if (source.kind !== "file") return undefined;
+  const match =
+    DATE.exec(source.filename) ?? DATE.exec(source.content.slice(0, 300));
+  if (!match) return undefined;
+  const [, y, m1, d1, m2, d2] = match;
+  const pad = (n: string) => n.padStart(2, "0");
+  return `${y}-${pad(m1 ?? m2)}-${pad(d1 ?? d2)}`;
+}
+
 /**
  * 抽取: the atomic facts of each input, a file's passage by passage, each
  * with when it became true when the content says (「上週…」), never later
- * than now. A note the member wrote with the files goes along as context.
+ * than now. A file's fact the content gives no time for holds from the
+ * file's own date (a wiki page's 最後更新, a meeting's date), when it has
+ * one. A note the member wrote with the files goes along as context.
  */
 export async function extract(
   state: Pick<InputState, "inputs"> &
@@ -276,7 +293,9 @@ export async function extract(
   const now = new Date();
   const today = `\n- 今天：${teamDate(now)}`;
   const found = await mapLimited(units, EXTRACT_CONCURRENCY, async (unit) => {
-    const hint = hintFor(state.inputs[unit.d].source);
+    const { source } = state.inputs[unit.d];
+    const hint = hintFor(source);
+    const dated = dateOf(source);
     const { facts } = Extracted.parse(
       await chatModel(purposeOf(state, "extract"))
         .withStructuredOutput(Extraction, { name: "extraction" })
@@ -293,7 +312,7 @@ export async function extract(
     return facts
       .map((fact) => ({
         content: fact.content.trim(),
-        validFrom: validFromOf(fact.validFrom, now),
+        validFrom: validFromOf(fact.validFrom, now) ?? validFromOf(dated, now),
       }))
       .filter((fact) => fact.content);
   });

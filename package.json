@@ -19,7 +19,7 @@
     "setup:repo": "bash scripts/setup-repo.sh",
     "setup:worktree": "bash scripts/setup-worktree.sh",
     "test:e2e": "npm run test:e2e -w web",
-    "test:live": "npm run test:live -w web",
+    "test:live": "npm run test:live -w server && npm run test:live -w web",
     "prepare": "lefthook install",
     "typecheck": "npm run typecheck --workspaces",
     "postinstall": "npm exec -w web -- playwright install chromium"

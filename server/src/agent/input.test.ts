@@ -179,6 +179,44 @@ describe("extract", () => {
     expect(chat.structuredPrompts[0]).toMatch(/今天：\d{4}-\d{2}-\d{2}/);
   });
 
+  it("dates a file's undated facts by the file's own date, from its name or opening", async () => {
+    const { chat } = installStubModels();
+    chat.structured = (text) => ({
+      facts: text.includes("公式")
+        ? [
+            { content: "公式為 A = W × EF × R", validFrom: null },
+            { content: "R 上週改成 0.6", validFrom: "2026-02-20" },
+          ]
+        : [{ content: "維護人是林小樹", validFrom: null }],
+    });
+    const wiki = await chunked(
+      "wiki.md",
+      `# 避免排放算法\n\n> 最後更新 2026-03-02\n\n${"甲".repeat(40)}\n\n## 公式\n\n公式${"乙".repeat(40)}`,
+    );
+    const meeting = await chunked(
+      "meeting-2026-05-14.txt",
+      `週會\n\n${"丙".repeat(40)}`,
+    );
+    const faq = await chunked("faq.txt", `常見問題\n\n${"丁".repeat(40)}`);
+
+    const out = await extract({
+      message: "",
+      files: [],
+      inputs: [...wiki, ...meeting, ...faq],
+    });
+
+    const march2 = new Date("2026-03-02T00:00:00+08:00").toISOString();
+    expect(out.inputs[0].facts.map((f) => f.validFrom)).toEqual([
+      march2,
+      march2,
+      new Date("2026-02-20T00:00:00+08:00").toISOString(),
+    ]);
+    expect(out.inputs[1].facts[0].validFrom).toBe(
+      new Date("2026-05-14T00:00:00+08:00").toISOString(),
+    );
+    expect(out.inputs[2].facts[0].validFrom).toBeUndefined();
+  });
+
   it("drops blank facts", async () => {
     const { chat } = installStubModels();
     chat.structured = () => ({
