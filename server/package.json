@@ -15,7 +15,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --env-file-if-exists=../.env src/migrate.ts",
     "db:create": "tsx --env-file-if-exists=../.env src/database-cli.ts create",
-    "db:drop": "tsx --env-file-if-exists=../.env src/database-cli.ts drop"
+    "db:drop": "tsx --env-file-if-exists=../.env src/database-cli.ts drop",
+    "reembed": "tsx --env-file-if-exists=../.env src/reembed-cli.ts"
   },
   "dependencies": {
     "@ai-sdk/langchain": "^3.0.172",

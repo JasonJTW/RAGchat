@@ -117,7 +117,7 @@ prod up -d --build --wait
 prod image prune -f
 ```
 
-Migrations run when the new server starts. If it doesn't come up healthy, `prod logs server`; to go back, `git checkout <previous commit>` and `prod up -d --build --wait` (a migration that already ran stays: restore the backup if the old code can't use it).
+Migrations run when the new server starts. After changing `EMBEDDING_MODEL` in `.env`, embed the stored rows again: `prod exec server node dist/reembed-cli.js` (until then the knowledge base embedded by the old model is left out of every search). If it doesn't come up healthy, `prod logs server`; to go back, `git checkout <previous commit>` and `prod up -d --build --wait` (a migration that already ran stays: restore the backup if the old code can't use it).
 
 ## Backups
 
