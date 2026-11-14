@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import { chunkSource, fileText, isSupported } from "./source-files.js";
 
@@ -151,6 +152,20 @@ describe("docx", () => {
       "倉庫盤點在每月最後一個週六上午十點進行，由張小石負責。",
       "盤點後在共用試算表登記每個類別的件數。",
     ]);
+  });
+
+  it("reads no text from a docx that inflates to over 50 MB (a zip bomb)", async () => {
+    const zip = await JSZip.loadAsync(
+      readFileSync(path.join(E2E_FIXTURES, "warehouse-inventory.docx")),
+    );
+    zip.file("word/media/padding.bin", Buffer.alloc(51 * 1024 * 1024));
+    const bomb = await zip.generateAsync({
+      type: "nodebuffer",
+      compression: "DEFLATE",
+    });
+    expect(bomb.length).toBeLessThan(1024 * 1024);
+
+    expect(await fileText("bomb.docx", bomb)).toBe("");
   });
 
   it("reads no text from a file that is not really a docx", async () => {

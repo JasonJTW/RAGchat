@@ -1,4 +1,5 @@
 import { getEncoding } from "js-tiktoken";
+import { inflateRawSync } from "node:zlib";
 import mammoth from "mammoth";
 import { getDocument, VerbosityLevel } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { chunkMarkdown, type Chunk } from "./markdown-chunks.js";
@@ -45,6 +46,7 @@ export async function fileText(
     return bytes.toString("utf8").replace(/\r\n?/g, "\n");
   if (extension === "pdf") return (await pdfPages(bytes)).join(PAGE_BREAK);
   if (extension === "docx") {
+    if (!inflatesWithin(bytes, MAX_DOCX_INFLATED)) return "";
     try {
       return (await mammoth.extractRawText({ buffer: bytes })).value;
     } catch {
@@ -200,4 +202,57 @@ function opening(content: string): string {
   return chars.length <= OPENING_CHARS
     ? firstLine
     : `${chars.slice(0, OPENING_CHARS).join("")}…`;
+}
+
+/** A docx (a zip) may hold at most this much once inflated, all parts together. */
+const MAX_DOCX_INFLATED = 50 * 1024 * 1024;
+
+/**
+ * Whether every entry of the zip inflates to at most `max` bytes in all,
+ * checked by inflating each one under that cap, whatever sizes the zip
+ * declares (a zip bomb declares small ones). False for what isn't a zip.
+ */
+function inflatesWithin(zip: Buffer, max: number): boolean {
+  try {
+    // End of central directory: its signature, within the last 64 KiB.
+    let end = -1;
+    for (let i = zip.length - 22; i >= Math.max(0, zip.length - 65_557); i--)
+      if (zip.readUInt32LE(i) === 0x06054b50) {
+        end = i;
+        break;
+      }
+    if (end < 0) return false;
+    const count = zip.readUInt16LE(end + 10);
+    let at = zip.readUInt32LE(end + 16);
+    let total = 0;
+    for (let n = 0; n < count; n++) {
+      if (zip.readUInt32LE(at) !== 0x02014b50) return false;
+      const method = zip.readUInt16LE(at + 10);
+      const compressed = zip.readUInt32LE(at + 20);
+      const local = zip.readUInt32LE(at + 42);
+      at +=
+        46 +
+        zip.readUInt16LE(at + 28) +
+        zip.readUInt16LE(at + 30) +
+        zip.readUInt16LE(at + 32);
+      if (zip.readUInt32LE(local) !== 0x04034b50) return false;
+      const start =
+        local +
+        30 +
+        zip.readUInt16LE(local + 26) +
+        zip.readUInt16LE(local + 28);
+      const data = zip.subarray(start, start + compressed);
+      if (method === 0) total += data.length;
+      else if (method === 8)
+        total += inflateRawSync(data, {
+          maxOutputLength: max - total + 1,
+        }).length;
+      else return false;
+      if (total > max) return false;
+    }
+    return true;
+  } catch {
+    // Past the cap (RangeError), or not a well-formed zip.
+    return false;
+  }
 }
