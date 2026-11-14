@@ -14,7 +14,7 @@ import {
 } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { forgetParts } from "./conversations.js";
-import { db } from "./db.js";
+import { db, type Tx, isUuid } from "./db.js";
 import {
   deletions,
   facts,
@@ -261,8 +261,6 @@ function held(during?: Period): SQL | undefined {
     or(isNull(facts.validTo), gt(facts.validTo, during.from)),
   );
 }
-
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 // The entities an item's new fact and its target speak of (i: the item).
 const ENTITIES_OF_ITEM = sql.raw(
@@ -1803,10 +1801,4 @@ function editedOf(
   return fact?.originalContent != null && fact.editedBy != null
     ? { edited: { by: fact.editedBy, originalContent: fact.originalContent } }
     : {};
-}
-
-function isUuid(id: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-    id,
-  );
 }

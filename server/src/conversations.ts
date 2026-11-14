@@ -1,5 +1,5 @@
 import { and, desc, eq, sql } from "drizzle-orm";
-import { db } from "./db.js";
+import { db, type Tx } from "./db.js";
 import { conversations } from "./db/schema.js";
 import type { Caller } from "./workspaces.js";
 
@@ -137,8 +137,6 @@ function withoutFileData<P extends { type: string }>(part: P) {
   };
   return { type: "file", filename, mediaType };
 }
-
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
  * Drops from the workspace's conversations every data part (proposal card,

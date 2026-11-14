@@ -11,7 +11,7 @@ import {
   sql,
 } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
-import { db } from "./db.js";
+import { db, type Tx } from "./db.js";
 import * as schema from "./db/schema.js";
 import { workspaces } from "./db/schema.js";
 import {
@@ -234,8 +234,6 @@ export async function copyDemoSeed(tx: Tx, workspaceId: string) {
   const template = await demoTemplate();
   await copyWorkspace(tx, template, workspaceId);
 }
-
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 const templates = new Map<string, Promise<string>>();
 

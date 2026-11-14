@@ -1,5 +1,5 @@
 import { sql, type SQL } from "drizzle-orm";
-import { db } from "./db.js";
+import { db, type Tx, isUuid } from "./db.js";
 import { embeddings } from "./models.js";
 import type { Period } from "./periods.js";
 
@@ -61,7 +61,6 @@ export interface Relink {
 export const CANDIDATE_AT = 0.5;
 const CANDIDATES = 5;
 
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Db = Tx | typeof db;
 
 /** How names compare: trimmed, case and width folded. */
@@ -610,10 +609,4 @@ async function liveAmong(
       and ${live(sql`e.id`)}
   `);
   return new Set(rows.map((row) => row.id));
-}
-
-function isUuid(id: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-    id,
-  );
 }

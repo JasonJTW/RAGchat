@@ -37,6 +37,16 @@ const pool = globalThis.RAGCHAT_POOL.pool;
 
 export const db = drizzle(pool, { schema });
 
+/** A transaction of `db`, as its callback gets it. */
+export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** Whether the id is a UUID, as every row id is; any other is no row's. */
+export function isUuid(id: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    id,
+  );
+}
+
 /** Applies every migration not yet applied to the database. */
 export function migrate(database: typeof db = db): Promise<void> {
   return runMigrations(database, { migrationsFolder: MIGRATIONS });

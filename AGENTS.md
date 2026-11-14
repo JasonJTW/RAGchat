@@ -17,7 +17,7 @@
 
 ## Conventions
 
-- Sign-in: the server asks `identify(req)` / `callerOf(req)` (`server/src/auth.ts`, `server/src/workspaces.ts`); knowledge base routes go through `requireMember` in `app.ts`. Tests and E2E fake Clerk with `STUB_AUTH=1` and a `stub_session` cookie (`stubSession()` in `server/src/stub-auth.ts`, `signIn()` in `web/e2e/sign-in.ts`; E2E specs start signed in as a 成員).
+- Sign-in: the server asks `identify(req)` / `callerOf(req)` (`server/src/auth.ts`, `server/src/workspaces.ts`); knowledge base routes go through `requireCaller` in `app.ts`, which admits a 成員 and a 訪客 who passed the human check today (each in their own workspace; what a 訪客 may do is `policyOf` in `server/src/trial.ts`). Tests and E2E fake Clerk with `STUB_AUTH=1` and a `stub_session` cookie (`stubSession()` in `server/src/stub-auth.ts`, `signIn()` in `web/e2e/sign-in.ts`; E2E specs start signed in as a 成員).
 - Tests sit next to the code as `*.test.ts(x)`. Server tests import `app` from `server/src/app.ts` and hit it with supertest; `server/src/index.ts` only calls `listen`.
 - E2E specs live in `web/e2e/*.spec.ts`; Vitest ignores that folder.
 - De-identification wraps the agent (`server/src/pseudonyms.ts`): text from a caller is pseudonymised before any model, embedding or table sees it (`chat.ts` for messages, the input subgraph's `deidentify` node for files, `app.ts` for edits), and re-identified on the way out (the chat stream, and every JSON response of the knowledge base routes). New text entering, or a new route returning stored text, must go through it. Server tests for it use a `team` workspace; `guest` ones are never de-identified.

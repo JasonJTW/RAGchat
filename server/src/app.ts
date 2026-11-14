@@ -1,5 +1,6 @@
 import express, {
   type ErrorRequestHandler,
+  type Request,
   type RequestHandler,
   type Response,
 } from "express";
@@ -71,12 +72,19 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/api/me", async (req, res) => {
+// The signed-in user, or undefined with a 401 sent.
+async function identified(req: Request, res: Response) {
   const identity = await identify(req);
-  if (!identity) {
-    res.status(401).json({ error: "sign in first" });
-    return;
-  }
+  if (!identity) signInFirst(res);
+  return identity ?? undefined;
+}
+
+const signInFirst = (res: Response) =>
+  res.status(401).json({ error: "sign in first" });
+
+app.get("/api/me", async (req, res) => {
+  const identity = await identified(req, res);
+  if (!identity) return;
   if (!policyOf(identity.role).trial) {
     res.json(identity);
     return;
@@ -90,17 +98,14 @@ app.get("/api/me", async (req, res) => {
 const VerifyBody = z.object({ token: z.string().min(1).max(4096) });
 
 app.post("/api/trial/verify", async (req, res) => {
-  const identity = await identify(req);
-  if (!identity) {
-    res.status(401).json({ error: "sign in first" });
-    return;
-  }
+  const identity = await identified(req, res);
+  if (!identity) return;
   if (!policyOf(identity.role).trial) {
     res.status(403).json({ error: "only a 訪客 has a trial workspace" });
     return;
   }
   const body = VerifyBody.safeParse(req.body);
-  if (!body.success || !(await passesTurnstile(body.data.token, req.ip))) {
+  if (!body.success || !(await passesTurnstile(body.data.token))) {
     res.status(403).json({ error: "人機驗證沒有通過，請再試一次。" });
     return;
   }
@@ -121,7 +126,7 @@ app.get("/api/trial/example", (_req, res) => {
 const requireCaller: RequestHandler = async (req, res, next) => {
   const caller = await callerOf(req);
   if (caller === "signed out") {
-    res.status(401).json({ error: "sign in first" });
+    signInFirst(res);
     return;
   }
   if (caller === "unverified") {

@@ -6,7 +6,7 @@ import {
   randomBytes,
 } from "node:crypto";
 import { and, asc, eq, sql } from "drizzle-orm";
-import { db } from "./db.js";
+import { db, type Tx } from "./db.js";
 import { excludedTerms, pseudonyms, workspaces } from "./db/schema.js";
 import { piiAnalyzer } from "./pii-analyzer.js";
 import { deidentifies } from "./trial.js";
@@ -243,8 +243,6 @@ export async function unmarkExcluded(
       ),
     );
 }
-
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 // The kind of a term a 成員 marked 敏感.
 const SENSITIVE_KIND = "敏感詞";
