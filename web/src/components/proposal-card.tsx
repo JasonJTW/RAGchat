@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { TermMarker } from "@/components/term-marker";
 import type { Conflict, Proposal } from "@/lib/chat-message";
 import { teamDate } from "@/lib/team-date";
 
@@ -34,6 +35,9 @@ type Item = Proposal["items"][number];
  * the knowledge base changed since the proposal was made, 確認 is stopped
  * and the card shows each change (舊 → 新): the member rejects, or confirms
  * anyway (仍確認) having seen them.
+ *
+ * While pending, a folded 標記敏感詞 lets the member mark a term sensitive
+ * or not for later input (TermMarker).
  */
 export function ProposalCard({ proposal }: { proposal: Proposal }) {
   const [decided, setDecided] = useState<Proposal>(proposal);
@@ -191,6 +195,7 @@ export function ProposalCard({ proposal }: { proposal: Proposal }) {
           </ul>
         </div>
       )}
+      {pending && <TermMarker />}
       {decided.status === "pending" ? (
         <div className="mt-3 flex items-center gap-2">
           <Button

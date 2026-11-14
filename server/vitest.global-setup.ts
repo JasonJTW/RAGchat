@@ -10,6 +10,7 @@ import { DEFAULT_DATABASE_URL, migrate } from "./src/db.js";
 declare module "vitest" {
   export interface ProvidedContext {
     databaseUrl: string;
+    pseudonymKey: string;
   }
 }
 
@@ -30,6 +31,10 @@ export default async function setup(project: TestProject) {
     await pool.end();
   }
   project.provide("databaseUrl", testUrl.href);
+  // One pseudonym key per run, as there is one database: every test file
+  // reads the pseudonyms the others wrote (the team workspace's). Never the
+  // key in .env.
+  project.provide("pseudonymKey", randomBytes(32).toString("base64"));
 
   return () => dropDatabase(testUrl.href);
 }

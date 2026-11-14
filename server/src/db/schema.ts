@@ -8,6 +8,7 @@ import {
   pgTable,
   text,
   timestamp,
+  unique,
   uuid,
   vector,
 } from "drizzle-orm/pg-core";
@@ -242,4 +243,51 @@ export const conversations = pgTable(
       table.updatedAt,
     ),
   ],
+);
+
+/**
+ * 代稱 (ADR-0004): one sensitive value and the pseudonym that stands for it
+ * everywhere in the workspace's knowledge base (〔人名3〕). The value is only
+ * here, AES-256-GCM encrypted with PSEUDONYM_ENCRYPTION_KEY; `value_hash` (an
+ * HMAC under the same key) finds the row for a value without decrypting.
+ * A 成員 marking a term 敏感 adds a row too. See pseudonyms.ts.
+ */
+export const pseudonyms = pgTable(
+  "pseudonyms",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: workspaceId(),
+    /** e.g. 〔人名3〕: the kind, then a number counted per kind. */
+    pseudonym: text("pseudonym").notNull(),
+    /** What the value is: 人名, 組織, 電話, 信箱, 身分證, 統編, 地址, 金額, 卡號, 敏感詞. */
+    kind: text("kind").notNull(),
+    valueHash: text("value_hash").notNull(),
+    /** base64 of IV (12 bytes) | tag (16 bytes) | ciphertext. */
+    valueCipher: text("value_cipher").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    unique("pseudonyms_value").on(t.workspaceId, t.valueHash),
+    unique("pseudonyms_pseudonym").on(t.workspaceId, t.pseudonym),
+  ],
+);
+
+/**
+ * 排除詞: terms a 成員 marked as not sensitive, never pseudonymised in later
+ * input. Stored as typed, since they are by definition not sensitive.
+ */
+export const excludedTerms = pgTable(
+  "excluded_terms",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: workspaceId(),
+    term: text("term").notNull(),
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [unique("excluded_terms_term").on(t.workspaceId, t.term)],
 );

@@ -1,3 +1,4 @@
+import { localAnalyzer } from "./src/pii-analyzer.js";
 import { inject } from "vitest";
 import { installStubModels } from "./src/stub-models.js";
 
@@ -10,3 +11,7 @@ installStubModels();
 // the stub off, so none is ever set in tests.
 process.env.STUB_AUTH = "1";
 delete process.env.CLERK_SECRET_KEY;
+// De-identification (pseudonyms.ts) runs on the local analyzer, never a
+// Presidio sidecar, with this run's own key (vitest.global-setup.ts).
+globalThis.PII_ANALYZER = localAnalyzer();
+process.env.PSEUDONYM_ENCRYPTION_KEY = inject("pseudonymKey");

@@ -22,6 +22,15 @@ import {
   rejectProposal,
   type Stopped,
 } from "./knowledge-base.js";
+import {
+  DeidentificationUnavailable,
+  listTerms,
+  markTerm,
+  pseudonymize,
+  reidentify,
+  unmarkExcluded,
+} from "./pseudonyms.js";
+import { containsSecret, SECRET_REFUSAL } from "./secrets.js";
 import { callerOf, type Caller } from "./workspaces.js";
 
 export const app = express();
@@ -70,9 +79,36 @@ const requireMember: RequestHandler = async (req, res, next) => {
 };
 const callerIn = (res: Response) => res.locals.caller as Caller;
 app.use(
-  ["/api/chat", "/api/conversations", "/api/proposals", "/api/sources"],
+  [
+    "/api/chat",
+    "/api/conversations",
+    "/api/proposals",
+    "/api/sources",
+    "/api/terms",
+  ],
   requireMember,
 );
+
+// The knowledge base and conversations hold pseudonyms (ADR-0004); every
+// JSON response puts the real values back for the 成員. (The chat stream
+// does the same in chat.ts.)
+const reidentifyResponses: RequestHandler = (_req, res, next) => {
+  const send = res.json.bind(res);
+  res.json = ((body: unknown) => {
+    reidentify(callerIn(res).workspaceId, body).then(send, (error: unknown) => {
+      console.error("response not re-identified:", error);
+      res.status(503);
+      send({ error: UNAVAILABLE });
+    });
+    return res;
+  }) as typeof res.json;
+  next();
+};
+app.use(
+  ["/api/conversations", "/api/proposals", "/api/sources"],
+  reidentifyResponses,
+);
+const UNAVAILABLE = "de-identification is unavailable; try again later";
 
 // Check the shapes the server reads and cap the size. Earlier answers come
 // back in the history, so only questions are kept short.
@@ -169,9 +205,27 @@ app.post("/api/proposals/:id/confirm", async (req, res) => {
     return;
   }
   const { workspaceId, userId } = callerIn(res);
+  // An edit is the 成員's own text, with real values: refused if it holds a
+  // secret, pseudonymised like any input.
+  const { edits } = body.data;
+  if (
+    (await Promise.all(edits.map((e) => containsSecret(e.content)))).some(
+      Boolean,
+    )
+  ) {
+    res.status(422).json({ error: SECRET_REFUSAL });
+    return;
+  }
+  const safe = await pseudonymize(
+    workspaceId,
+    edits.map((e) => e.content),
+  );
   sendDecision(
     res,
-    await confirmProposal(workspaceId, req.params.id, userId, body.data),
+    await confirmProposal(workspaceId, req.params.id, userId, {
+      ...body.data,
+      edits: edits.map((e, i) => ({ ...e, content: safe[i] })),
+    }),
   );
 });
 
@@ -232,12 +286,54 @@ app.post("/api/sources", upload.array("files"), async (req, res) => {
     files,
   );
   if (refusal) {
-    res
-      .status(refusal.reason === "unsupported" ? 415 : 413)
-      .json({ error: refusal.message });
+    res.status(REFUSAL_STATUS[refusal.reason]).json({ error: refusal.message });
     return;
   }
   res.status(201).json({ proposals, skipped });
+});
+
+const REFUSAL_STATUS = {
+  unsupported: 415,
+  "too large": 413,
+  "too long": 413,
+  secret: 422,
+  unavailable: 503,
+} as const;
+
+// 敏感詞 and 排除詞 (ADR-0004): a 成員 marks a term sensitive (pseudonymised
+// in all later input) or not (never pseudonymised). Terms go in the body,
+// never the URL, which proxies log.
+const TermBody = z.object({ term: z.string().trim().min(1).max(100) });
+
+app.get("/api/terms", async (_req, res) => {
+  res.json(await listTerms(callerIn(res).workspaceId));
+});
+
+app.put("/api/terms", async (req, res) => {
+  const body = TermBody.extend({ sensitive: z.boolean() }).safeParse(req.body);
+  if (!body.success) {
+    res
+      .status(400)
+      .json({ error: "term must be 1 to 100 characters; sensitive a boolean" });
+    return;
+  }
+  if (await containsSecret(body.data.term)) {
+    res.status(422).json({ error: SECRET_REFUSAL });
+    return;
+  }
+  const { workspaceId, userId } = callerIn(res);
+  await markTerm(workspaceId, userId, body.data.term, body.data.sensitive);
+  res.status(204).end();
+});
+
+app.delete("/api/terms/excluded", async (req, res) => {
+  const body = TermBody.safeParse(req.body);
+  if (!body.success) {
+    res.status(400).json({ error: "term must be 1 to 100 characters" });
+    return;
+  }
+  await unmarkExcluded(callerIn(res).workspaceId, body.data.term);
+  res.status(204).end();
 });
 
 const uploadLimitHandler: ErrorRequestHandler = (err, _req, res, next) => {
@@ -255,6 +351,11 @@ app.use(uploadLimitHandler);
 // answered without internals.
 const internalErrorHandler: ErrorRequestHandler = (err, _req, res, next) => {
   if (res.headersSent) return next(err);
+  if (err instanceof DeidentificationUnavailable) {
+    console.error(err);
+    res.status(503).json({ error: UNAVAILABLE });
+    return;
+  }
   if ((err as { type?: string }).type === "entity.too.large") {
     res.status(413).json({ error: "request body is too large" });
     return;

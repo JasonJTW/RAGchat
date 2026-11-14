@@ -10,6 +10,7 @@
     "dev:web": "npm run dev -w web",
     "dev:server": "npm run dev -w server",
     "db:up": "docker compose up -d --wait postgres",
+    "presidio:up": "docker compose up -d --wait presidio",
     "db:migrate": "npm run db:migrate -w server",
     "build": "npm run build -w web && npm run build -w server",
     "lint": "npm run lint --workspaces",

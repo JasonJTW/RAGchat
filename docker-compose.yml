@@ -22,5 +22,22 @@ services:
       timeout: 5s
       retries: 30
 
+  # Presidio Analyzer (ADR-0004): finds where the personal data in a text is;
+  # the server replaces it with pseudonyms itself. Only the server calls it,
+  # and nothing it sees is stored. Shared by every worktree, like postgres.
+  presidio:
+    image: mcr.microsoft.com/presidio-analyzer:2.2.362
+    ports:
+      - "127.0.0.1:${PRESIDIO_PORT:-5002}:3000"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:3000/health'')"',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
 volumes:
   postgres:

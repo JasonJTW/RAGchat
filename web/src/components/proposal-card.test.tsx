@@ -46,7 +46,7 @@ it("puts 取代 and 過時 first and open, folding many 新增 items", () => {
   const groups = container.querySelectorAll("details");
   expect(
     [...groups].map((g) => g.querySelector("summary")?.textContent),
-  ).toEqual(["取代與過時", "新增（30 項）"]);
+  ).toEqual(["取代與過時", "新增（30 項）", "標記敏感詞"]);
   expect(groups[0]).toHaveAttribute("open");
   expect(groups[1]).not.toHaveAttribute("open");
   expect(groups[0]).toHaveTextContent("事實 100");
