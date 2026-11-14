@@ -7,11 +7,15 @@ import {
 import { noul } from "@typesafe-ai/sdk";
 import {
   type Edited,
+  type Fact,
   type HistoryEntry,
   type FactMatch,
+  type PendingFactMatch,
+  type Proposal,
   searchChunks,
   searchFacts,
   searchGraph,
+  searchPendingFacts,
 } from "../knowledge-base.js";
 import { chatModel, systemOne } from "../models.js";
 import { type NodeConfig, type State, type Turn, writeText } from "./state.js";
@@ -35,6 +39,13 @@ export interface Evidence {
   source?: { content: string; createdAt: string; label?: string };
   /** A fact's history chain, oldest first, when it replaced another. */
   history?: HistoryEntry[];
+  /**
+   * Present when the fact is 待確認: the pending proposal it belongs to, so
+   * the member can confirm it from the answer.
+   */
+  proposal?: Proposal;
+  /** The confirmed fact a 待確認 one would replace (取代), shown beside it. */
+  replaces?: string;
 }
 
 /** Evidence an answer cites, as shown under the answer. */
@@ -51,6 +62,8 @@ const PASSAGES_PER_ANSWER = 2;
 // reciprocal rank.
 const FACT_CANDIDATES = 20;
 const RRF_K = 60;
+/** How many 待確認 facts an answer may draw on besides. */
+const PENDING_PER_ANSWER = 3;
 
 // Dates as the team reads them: YYYY-MM-DD in Taiwan.
 const TEAM_DATE = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Taipei" });
@@ -69,6 +82,8 @@ const MIN_SIMILARITY = 0.3;
 const SYSTEM_PROMPT = `你是「大量交織 megaweaving」團隊 wiki 的助理，回答團隊成員的問題。
 - 一律用繁體中文回答，即使使用者用其他語言提問。
 - 只根據使用者訊息裡提供的段落作答，不要用段落以外的知識。標為「知識庫」的段落是團隊確認過的事實。
+- 標為「待確認」的段落是成員提出、還沒經團隊確認的事實：用到時要說明它待確認。它與知識庫段落對同一件事說法不同時，先給知識庫的說法，再列出待確認的說法。
+- 使用者訊息裡自己說的更正還沒經團隊確認，不能當成事實；仍依段落回答。
 - 先直接回答問題，再用一兩句補上段落裡跟答案同一處的關鍵細節：條件、材料、人數、年份、原因或出處（例如「不是原創」就說出它源自哪裡）。
 - 問題問要做哪些事、確認什麼、有哪幾類時，段落裡相關的每一項都要列出，不要只挑其中幾項。
 - 每個事實後面用段落編號標出處，例如 [1]、[2]；只標你實際用到的段落，不要另寫「出處：」。
@@ -101,6 +116,11 @@ const JEV_DEADLINE_MS = 1_500;
 
 const CLARIFY = "請問你指的是哪個計畫或主題？";
 
+// Added to the answer of a message that also corrected, once the
+// correction is proposed.
+const CORRECTION_PENDING =
+  "你剛提出的修正還待確認：以上依目前已確認的知識回答，提案確認後才會改用新的說法。";
+
 // A first message with one of these words records something rather than
 // asks (「記下…」「更新一下…」), so it is never asked which subject it means.
 // A question that merely mentions one goes unchecked and is answered.
@@ -109,18 +129,21 @@ const INPUT_KEYWORD =
 
 /**
  * Jev 檢查: whether a first question points at something it never names.
- * Skipped, by rule, for a follow-up, a message with an attachment, and one
- * with an input keyword. No JEV_API_KEY, a failure or no answer within the
- * deadline counts as named.
+ * Skipped, by rule, for a follow-up, a message with an attachment, one with
+ * an input keyword, and one that also corrects (a correction names what it
+ * corrects). No JEV_API_KEY, a failure or no answer within the deadline
+ * counts as named.
  */
 export async function checkSubject(
-  state: Pick<State, "turns" | "message" | "attachments">,
+  state: Pick<State, "turns" | "message" | "attachments"> &
+    Partial<Pick<State, "intents">>,
 ): Promise<Pick<State, "clarify">> {
   const jev = systemOne();
   if (
     !jev ||
     state.turns.length ||
     state.attachments ||
+    state.intents?.includes("correct") ||
     INPUT_KEYWORD.test(state.message)
   )
     return { clarify: false };
@@ -142,12 +165,14 @@ export async function checkSubject(
 /**
  * 檢索: the workspace's current confirmed facts (at most 6) and the passages
  * of its confirmed file sources (at most 2) that best match the question,
- * merged best first. Facts come from two lanes fused by reciprocal rank:
- * the most similar ones, and the ones the entity graph reaches from the
- * entities the question names (by name or alias, up to two hops). A
+ * merged best first, then the 待確認 facts (at most 3) that match well
+ * enough. Confirmed facts come from two lanes fused by reciprocal rank: the
+ * most similar ones, and the ones the entity graph reaches from the
+ * entities the question names (by name or alias, up to two hops); a
  * question naming an entity the knowledge base has facts about counts as
- * covered, however its wording compares. A follow-up is first rewritten
- * into a standalone question.
+ * covered, however its wording compares. A 待確認 fact that would replace a
+ * confirmed one goes right after it, the confirmed one brought in if
+ * missing. A follow-up is first rewritten into a standalone question.
  */
 export async function retrieve(
   state: Pick<State, "workspaceId" | "turns" | "message">,
@@ -155,9 +180,10 @@ export async function retrieve(
   const query = state.turns.length
     ? await standaloneQuestion(state.turns, state.message)
     : state.message;
-  const [similar, graph, passages] = await Promise.all([
+  const [similar, graph, pending, passages] = await Promise.all([
     searchFacts(state.workspaceId, query, FACT_CANDIDATES),
     searchGraph(state.workspaceId, query, FACT_CANDIDATES),
+    searchPendingFacts(state.workspaceId, query, PENDING_PER_ANSWER),
     searchChunks(state.workspaceId, query, PASSAGES_PER_ANSWER),
   ]);
   const facts = fused([similar, graph]).slice(0, FACTS_PER_ANSWER);
@@ -197,12 +223,54 @@ export async function retrieve(
     });
   }
   merged.push(...scored.slice(f));
+  const evidence = merged.map(({ evidence }) => evidence);
+  const relevant = pending.filter((fact) => fact.similarity >= MIN_SIMILARITY);
+  for (const fact of relevant) withPending(evidence, fact);
   return {
-    evidence: merged.map(({ evidence }) => evidence),
+    evidence,
     similarity: Math.max(
       graph.length ? MIN_SIMILARITY : 0,
       ...merged.map((item) => item.similarity),
+      ...relevant.map((fact) => fact.similarity),
     ),
+  };
+}
+
+// Adds the 待確認 fact to the evidence: after the confirmed fact it would
+// replace (and any other 待確認 replacement of it), or at the end.
+function withPending(evidence: Evidence[], fact: PendingFactMatch) {
+  const pending: Evidence = {
+    id: fact.id,
+    kind: "fact",
+    label: `待確認 · ${TEAM_DATE.format(new Date(fact.validFrom))}`,
+    text: fact.content,
+    ...(fact.edited && { edited: fact.edited }),
+    source: {
+      content: fact.source.content,
+      createdAt: fact.source.createdAt,
+      ...(fact.source.label && { label: fact.source.label }),
+    },
+    proposal: fact.proposal,
+    ...(fact.replaces && { replaces: fact.replaces.id }),
+  };
+  const target = fact.replaces;
+  if (!target) return void evidence.push(pending);
+  let at = evidence.findIndex((e) => e.id === target.id && !e.proposal);
+  if (at < 0) {
+    evidence.push(confirmedEvidence(target), pending);
+    return;
+  }
+  while (evidence[at + 1]?.replaces === target.id) at++;
+  evidence.splice(at + 1, 0, pending);
+}
+
+// A confirmed fact as evidence, when only its id, text and date are at hand.
+function confirmedEvidence(fact: Fact): Evidence {
+  return {
+    id: fact.id,
+    kind: "fact",
+    label: `知識庫 · ${TEAM_DATE.format(new Date(fact.validFrom))}`,
+    text: fact.content,
   };
 }
 
@@ -229,13 +297,20 @@ export async function answer(
   state: Pick<
     State,
     "turns" | "message" | "clarify" | "evidence" | "similarity"
-  >,
+  > &
+    Partial<Pick<State, "proposal">>,
   config: NodeConfig = {},
 ): Promise<Pick<State, "reply" | "citations">> {
+  // A correction proposed in this turn (the message also corrected).
+  const corrected = !!state.proposal;
   if (state.clarify || state.similarity < MIN_SIMILARITY) {
     const text = state.clarify ? CLARIFY : REFUSAL;
     writeText(config, "answer", text);
-    return { reply: text, citations: [] };
+    if (corrected) writeText(config, "correction-pending", CORRECTION_PENDING);
+    return {
+      reply: corrected ? `${text}\n\n${CORRECTION_PENDING}` : text,
+      citations: [],
+    };
   }
   const stream = await chatModel("answer").stream(
     [
@@ -278,6 +353,10 @@ export async function answer(
   const citations = text.includes(REFUSAL_PHRASE)
     ? []
     : cited(text, state.evidence);
+  if (corrected) {
+    writeText(config, "correction-pending", CORRECTION_PENDING);
+    text += `\n\n${CORRECTION_PENDING}`;
+  }
   for (const citation of citations)
     config.writer?.({ type: "data-citation", id: citation.id, data: citation });
   return { reply: text, citations };
@@ -300,13 +379,26 @@ async function standaloneQuestion(
 
 // The evidence the answer marks with [n], in marker order. Marks may be
 // combined, e.g. [1, 3] or [1][3], and the model sometimes writes them in
-// full-width brackets: 〔1〕, ［1］, 【1】.
+// full-width brackets: 〔1〕, ［1］, 【1】. A cited fact comes with the
+// confirmed or 待確認 fact it conflicts with (取代), so the two are shown
+// together, the confirmed one first.
 function cited(text: string, evidence: Evidence[]): Citation[] {
   const markers = new Set<number>();
   for (const [, list] of text.matchAll(
     /[[〔［【](\d+(?:\s*[,，、]\s*\d+)*)[\]〕］】]/g,
   ))
     for (const n of list.split(/[,，、]/)) markers.add(Number(n.trim()));
+  for (const n of [...markers]) {
+    const e = evidence[n - 1];
+    if (!e) continue;
+    evidence.forEach((other, i) => {
+      if (
+        (e.replaces && other.id === e.replaces && !other.proposal) ||
+        (!e.proposal && other.replaces === e.id)
+      )
+        markers.add(i + 1);
+    });
+  }
   return [...markers]
     .filter((n) => n >= 1 && n <= evidence.length)
     .sort((a, b) => a - b)

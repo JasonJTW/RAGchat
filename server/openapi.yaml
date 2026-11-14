@@ -83,12 +83,26 @@ paths:
         how many. When no fact is meant, the reply says it found none and proposes
         nothing. Nothing changes until the proposal is confirmed.
 
+        A message ending in a question whose preceding sentences correct
+        (e.g. 「R 已經改成回收率了，那現在 A 怎麼算？」) does both: the part
+        before the question is the correction, proposed as above, and the
+        whole message is then answered as a question from the facts as they
+        were before the correction (it is pending), the answer text ending
+        with a note that the correction just proposed is 待確認. A clause
+        that itself asks (什麼, 嗎, 哪, 怎麼, …) does not correct, so
+        「R 改成什麼了？」 is only a question.
+
         Any other message is a question, answered from the workspace's
         current confirmed facts (the 6 nearest by embedding cosine) and the
         passages of its file 來源 with a confirmed proposal (the 2 best by
         embedding cosine and pg_trgm keyword similarity, merged by reciprocal
         rank fusion), merged by cosine similarity. A pending or rejected
-        file's passages are never answered from.
+        file's passages are never answered from. Then up to 3 待確認 facts
+        (of live items of pending proposals) with cosine ≥ 0.3 follow. A
+        待確認 fact that would replace a confirmed one comes right after it
+        (the confirmed one added if missing), and the two are cited together,
+        the confirmed one first; a 待確認 citation carries its `proposal` so
+        it can be confirmed from the answer.
         When earlier messages are sent, the latest one is first rewritten
         into a standalone question for retrieval, and the answer sees the
         whole conversation. The client sends the whole conversation each
@@ -101,8 +115,8 @@ paths:
         a subject it never names. If it does, the reply is the fixed sentence
         「請問你指的是哪個計畫或主題？」 with no citations; on a Jev failure,
         timeout or no JEV_API_KEY the question is answered as usual. The
-        check is skipped, by rule, for a message with a `file` part and for
-        one with an input keyword (輸入, 記下, 記錄, 記住, 寫入, 存入, 存進,
+        check is skipped, by rule, for a message with a `file` part, one that
+        also corrects, and one with an input keyword (輸入, 記下, 記錄, 記住, 寫入, 存入, 存進,
         新增, 加入, 更新, 補充, 更正, 修正, 改成, 改為).
         Streams the answer as an AI SDK UI message stream (Server-Sent Events).
         After the text, each fact or passage the answer marks with `[n]`
@@ -600,10 +614,10 @@ components:
         kind:
           type: string
           enum: [fact, passage]
-          description: A confirmed fact of the knowledge base, or a passage of a confirmed file 來源
+          description: A fact (confirmed, or 待確認 when `proposal` is present), or a passage of a confirmed file 來源
         label:
           type: string
-          description: "A fact's is `知識庫 · <valid from, YYYY-MM-DD in Taiwan>`; a passage's e.g. `05-projects-and-practice.md › 05 實踐案例 … › C. 移動微型空間計畫`, `04-founder-hsiao-yu-chih.pdf › 第 2 頁`, `faq.txt › Q: 網站有英文版嗎？`"
+          description: "A confirmed fact's is `知識庫 · <valid from, YYYY-MM-DD in Taiwan>`, a 待確認 fact's `待確認 · <valid from>`; a passage's e.g. `05-projects-and-practice.md › 05 實踐案例 … › C. 移動微型空間計畫`, `04-founder-hsiao-yu-chih.pdf › 第 2 頁`, `faq.txt › Q: 網站有英文版嗎？`"
         text:
           type: string
           description: The fact, or the passage's original text
@@ -632,6 +646,17 @@ components:
               format: date-time
             label:
               type: string
+        proposal:
+          $ref: "#/components/schemas/Proposal"
+          description: >
+            Present when the fact is 待確認: the pending 提案 it belongs to,
+            as its card shows it, so a member can confirm it from the answer
+            (POST /api/proposals/{id}/confirm)
+        replaces:
+          type: string
+          description: >
+            A 待確認 fact's: the confirmed fact it would replace (取代). The
+            two are cited together, the confirmed one first.
     Proposal:
       type: object
       description: >

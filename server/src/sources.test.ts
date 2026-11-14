@@ -345,11 +345,19 @@ describe("a file's passages", () => {
     expect(model.prompts[0]).toContain(passage.split("\n")[1]);
   });
 
-  it("are never cited while its proposal is pending, nor once it is rejected", async () => {
+  it("are never cited while its proposal is pending (its facts only as 待確認), nor once it is rejected", async () => {
     model.reply = "見 [1]。";
     const pending = await uploaded();
 
-    expect(citationsOf(await chat(QUESTION))).toEqual([]);
+    const cited = citationsOf(await chat(QUESTION));
+    expect(cited.filter((c) => !c.proposal)).toEqual([]);
+    for (const c of cited)
+      expect(c).toMatchObject({
+        kind: "fact",
+        proposal: { id: pending.id },
+        // Its source is the file's passage it was drawn from.
+        source: { label: expect.stringContaining(" › ") as unknown },
+      });
 
     await request(app).post(`/api/proposals/${pending.id}/reject`);
     expect(citationsOf(await chat(QUESTION))).toEqual([]);
@@ -394,10 +402,13 @@ describe("an uploaded file with instructions in it", () => {
     ])
       expect(proposal.status).toBe("pending");
     expect(model.prompts).toEqual([]);
-    // Nothing is answerable: no fact and no passage of any of the files.
+    // Nothing is answerable as known: no confirmed fact and no passage of any
+    // of the files (their facts are cited only as 待確認).
     model.reply = "見 [1]。";
-    expect(citationsOf(await chat("R 是什麼？"))).toEqual([]);
-    expect(citationsOf(await chat("週會在哪天？"))).toEqual([]);
+    for (const question of ["R 是什麼？", "週會在哪天？"])
+      expect(
+        citationsOf(await chat(question)).filter((c) => !c.proposal),
+      ).toEqual([]);
     // The earlier proposal is still pending, so a member can still decide it.
     expect((await confirm(earlier)).status).toBe(200);
   });
