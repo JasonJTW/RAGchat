@@ -408,8 +408,12 @@ async function compareBatch(
     batch.map((fact) => fact.content),
   );
   const found = await Promise.all(
-    vectors.map((vector) =>
-      searchFacts(state.workspaceId, vector, COMPARE_CANDIDATES),
+    vectors.map((vector, i) =>
+      searchFacts(
+        state.workspaceId,
+        { text: batch[i].content, vector },
+        COMPARE_CANDIDATES,
+      ),
     ),
   );
   const candidates = [

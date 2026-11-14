@@ -122,6 +122,24 @@ describe("retrieve", () => {
     expect(missing.evidence[6]).not.toHaveProperty("proposal");
   });
 
+  it("embeds the question once for every lane, also for a past time", async () => {
+    const { embedded } = installStubModels();
+    const workspaceId = await workspaceWith(
+      FORMULA,
+      "「林小樹」負責「避免排放算法」",
+    );
+    const asked = (q: string) =>
+      Object.values(embedded)
+        .flat()
+        .filter((text) => text === q).length;
+
+    await retrieve(ask(workspaceId, "林小樹負責的 A = m × EF 怎麼算？"));
+    await retrieve(ask(workspaceId, "三月時 A = m × EF 怎麼算？"));
+
+    expect(asked("林小樹負責的 A = m × EF 怎麼算？")).toBe(1);
+    expect(asked("三月時 A = m × EF 怎麼算？")).toBe(1);
+  });
+
   it("finds no fact of another workspace", async () => {
     installStubModels();
     await workspaceWith(FORMULA);

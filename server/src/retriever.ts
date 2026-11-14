@@ -4,7 +4,9 @@ import {
   type BaseRetrieverInput,
 } from "@langchain/core/retrievers";
 import {
+  embedQuestion,
   type FactMatch,
+  type Question,
   searchChanges,
   searchFacts,
   searchGraph,
@@ -91,6 +93,15 @@ export class KnowledgeRetriever extends BaseRetriever<RetrievedFact> {
   async _getRelevantDocuments(
     query: string,
   ): Promise<Document<RetrievedFact>[]> {
+    return this.search(await embedQuestion(query));
+  }
+
+  /**
+   * As `invoke`, for a question embedded already: its embedding is shared
+   * by every lane, and by other searches the caller makes with it.
+   */
+  async search(question: Question): Promise<Document<RetrievedFact>[]> {
+    const query = question.text;
     const during =
       this.period === undefined
         ? periodAsked(query, this.now ?? new Date())
@@ -98,10 +109,10 @@ export class KnowledgeRetriever extends BaseRetriever<RetrievedFact> {
     const ws = this.workspaceId;
     const terms = termsOf(query);
     const [vector, keyword, graph, time] = await Promise.all([
-      searchFacts(ws, query, CANDIDATES, during),
-      searchKeyword(ws, query, CANDIDATES, during),
-      searchGraph(ws, query, CANDIDATES, during),
-      during ? searchChanges(ws, query, CANDIDATES, during) : [],
+      searchFacts(ws, question, CANDIDATES, during),
+      searchKeyword(ws, question, CANDIDATES, during),
+      searchGraph(ws, question, CANDIDATES, during),
+      during ? searchChanges(ws, question, CANDIDATES, during) : [],
     ]);
     const lanes: [Lane, FactMatch[]][] = [
       ["vector", vector],

@@ -211,6 +211,23 @@ export type FactDraft =
     };
 
 /**
+ * A query and its embedding by EMBEDDING_MODEL, embedded once for every
+ * search it is given to; each search also takes the text alone.
+ */
+export interface Question {
+  text: string;
+  vector: number[];
+}
+
+/** The text with its embedding by EMBEDDING_MODEL. */
+export async function embedQuestion(text: string): Promise<Question> {
+  return { text, vector: await embeddings().embedQuery(text) };
+}
+
+const asQuestion = (query: string | Question) =>
+  typeof query === "string" ? embedQuestion(query) : Promise.resolve(query);
+
+/**
  * A change to a current fact proposed by a correction, or by an input whose
  * fact replaces it. A replacing fact drawn from a file may name its passage
  * (`chunk`) and the entities it speaks of, as a `FactDraft` does.
@@ -1239,19 +1256,17 @@ async function itemsOf(tx: Tx, proposalId: string): Promise<ProposalItem[]> {
 /**
  * The current confirmed facts most similar to the query, best first, each
  * with its history chain when it has one; for a past period, the facts that
- * held then. The query is text, or its embedding by EMBEDDING_MODEL. Facts
- * embedded by another model than EMBEDDING_MODEL can't be compared and are
- * skipped.
+ * held then. Facts embedded by another model than EMBEDDING_MODEL can't be
+ * compared and are skipped.
  */
 export async function searchFacts(
   workspaceId: string,
-  query: string | number[],
+  query: string | Question,
   limit: number,
   during?: Period,
 ): Promise<FactMatch[]> {
   const model = embeddings();
-  const vector =
-    typeof query === "string" ? await model.embedQuery(query) : query;
+  const { vector } = await asQuestion(query);
   return factMatches(
     workspaceId,
     vector,
@@ -1278,11 +1293,12 @@ const MIN_KEYWORD = 0.2;
  */
 export async function searchKeyword(
   workspaceId: string,
-  query: string,
+  query: string | Question,
   limit: number,
   during?: Period,
 ): Promise<KeywordMatch[]> {
-  const keyword = sql<number>`word_similarity(${query}, ${facts.content})`;
+  const text = typeof query === "string" ? query : query.text;
+  const keyword = sql<number>`word_similarity(${text}, ${facts.content})`;
   const rows = await db
     .select({ id: facts.id, keyword })
     .from(facts)
@@ -1297,8 +1313,7 @@ export async function searchKeyword(
     .limit(limit);
   if (!rows.length) return [];
   const scores = new Map(rows.map((row) => [row.id, Number(row.keyword)]));
-  const model = embeddings();
-  const vector = await model.embedQuery(query);
+  const { vector } = await asQuestion(query);
   const matches = await factMatches(
     workspaceId,
     vector,
@@ -1317,12 +1332,12 @@ export async function searchKeyword(
  */
 export async function searchChanges(
   workspaceId: string,
-  query: string,
+  query: string | Question,
   limit: number,
   during: Period,
 ): Promise<FactMatch[]> {
   const model = embeddings();
-  const vector = await model.embedQuery(query);
+  const { vector } = await asQuestion(query);
   const within = (column: typeof facts.validFrom | typeof facts.validTo) =>
     and(gte(column, during.from), lt(column, during.to));
   return factMatches(
@@ -1355,11 +1370,14 @@ const GRAPH_CANDIDATES = 50;
  */
 export async function searchGraph(
   workspaceId: string,
-  query: string,
+  query: string | Question,
   limit: number,
   during?: Period,
 ): Promise<GraphMatch[]> {
-  const seeds = await entitiesNamedIn(workspaceId, query);
+  const seeds = await entitiesNamedIn(
+    workspaceId,
+    typeof query === "string" ? query : query.text,
+  );
   const reached = await graphFacts(
     workspaceId,
     seeds,
@@ -1368,8 +1386,7 @@ export async function searchGraph(
   );
   if (!reached.length) return [];
   const hops = new Map(reached.map((r) => [r.factId, r.hops]));
-  const model = embeddings();
-  const vector = await model.embedQuery(query);
+  const { vector } = await asQuestion(query);
   const matches = await factMatches(
     workspaceId,
     vector,
@@ -1476,11 +1493,11 @@ export interface PendingFactMatch {
  */
 export async function searchPendingFacts(
   workspaceId: string,
-  query: string,
+  query: string | Question,
   limit: number,
 ): Promise<PendingFactMatch[]> {
   const model = embeddings();
-  const vector = await model.embedQuery(query);
+  const { vector } = await asQuestion(query);
   const target = alias(facts, "target");
   const similarity = sql<number>`1 - (${cosineDistance(facts.embedding, vector)})`;
   return db.transaction(async (tx) => {
@@ -1570,13 +1587,13 @@ const MIN_KEYWORD_SIMILARITY = 0.1;
  */
 export async function searchChunks(
   workspaceId: string,
-  query: string,
+  query: string | Question,
   limit: number,
 ): Promise<ChunkMatch[]> {
   const model = embeddings();
-  const vector = await model.embedQuery(query);
+  const { text, vector } = await asQuestion(query);
   const distance = cosineDistance(sourceChunks.embedding, vector);
-  const keyword = sql<number>`word_similarity(${query}, ${sourceChunks.content})`;
+  const keyword = sql<number>`word_similarity(${text}, ${sourceChunks.content})`;
   const ranked = (order: SQL, where?: SQL) =>
     db
       .select({

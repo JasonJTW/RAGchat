@@ -7,7 +7,7 @@ import {
   propose,
   searchFacts,
 } from "../knowledge-base.js";
-import { chatModel, embeddings } from "../models.js";
+import { chatModel } from "../models.js";
 import { teamDate, teamMidnight } from "../periods.js";
 import { type NodeConfig, purposeOf, type State, writeText } from "./state.js";
 
@@ -36,10 +36,9 @@ const CITED_BOOST = 0.1;
 export async function locateTargets(
   state: Pick<State, "workspaceId" | "correction" | "cited">,
 ): Promise<Pick<State, "candidates">> {
-  const vector = await embeddings().embedQuery(state.correction);
   const [cited, matched] = await Promise.all([
     currentFacts(state.workspaceId, state.cited.slice(0, CANDIDATES)),
-    searchFacts(state.workspaceId, vector, RANKED),
+    searchFacts(state.workspaceId, state.correction, RANKED),
   ]);
   const wasCited = new Set(cited.map((fact) => fact.id));
   const ranked = matched

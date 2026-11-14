@@ -11,6 +11,7 @@ import {
   type HistoryEntry,
   type PendingFactMatch,
   type Proposal,
+  embedQuestion,
   searchChunks,
   searchPendingFacts,
 } from "../knowledge-base.js";
@@ -192,12 +193,14 @@ export async function retrieve(
     k: FACTS_PER_ANSWER,
     period,
   });
+  // Embedded once, for every search below.
+  const question = await embedQuestion(query);
   const [documents, pending, passages] = await Promise.all([
-    retriever.invoke(query),
+    retriever.search(question),
     period
       ? []
-      : searchPendingFacts(state.workspaceId, query, PENDING_PER_ANSWER),
-    searchChunks(state.workspaceId, query, PASSAGES_PER_ANSWER),
+      : searchPendingFacts(state.workspaceId, question, PENDING_PER_ANSWER),
+    searchChunks(state.workspaceId, question, PASSAGES_PER_ANSWER),
   ]);
   const facts = documents.map((d) => d.metadata);
   const scored: { similarity: number; evidence: Evidence }[] = facts.map(
