@@ -37,8 +37,12 @@ export async function sendFiles(page: Page, files: FileToAttach[], text = "") {
   await expect(page.getByRole("list", { name: "附件" })).toBeVisible();
   if (text) await page.getByRole("textbox", { name: "問題" }).fill(text);
   await page.getByRole("button", { name: "送出" }).click();
+  // The files are read before the request starts, while 送出 is still
+  // enabled: wait for the reply to begin, then for it to end (real models
+  // take minutes on a long file).
+  await expect(replies).toHaveCount(earlier + 1, { timeout: 60_000 });
   await expect(page.getByRole("button", { name: "送出" })).toBeEnabled({
-    timeout: 120_000,
+    timeout: 300_000,
   });
   return replies.nth(earlier);
 }
