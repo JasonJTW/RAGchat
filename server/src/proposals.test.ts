@@ -303,6 +303,125 @@ describe("confirming with an item's text edited inline", () => {
   });
 });
 
+describe("when a fact became true", () => {
+  const RECYCLED = "R 是回收率";
+  const SAID = "R 上週就改成回收率了";
+  const TEAM_DATE = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Taipei",
+  });
+  // The date a week ago in Taiwan, and its midnight there.
+  const lastWeek = TEAM_DATE.format(new Date(Date.now() - 7 * 86_400_000));
+  const midnight = (date: string) =>
+    new Date(`${date}T00:00:00+08:00`).toISOString();
+
+  /** The model reads 「上週」 as a week ago, in input and in corrections. */
+  function datingModel() {
+    const { chat: model } = installStubModels();
+    model.reply = "R 是回收率。[1]";
+    const structured = model.structured;
+    model.structured = (text, name) =>
+      name === "extraction"
+        ? { facts: [{ content: RECYCLED, validFrom: lastWeek }] }
+        : name === "correction"
+          ? {
+              corrections: [
+                {
+                  fact: 1,
+                  kind: "supersede",
+                  content: RECYCLED,
+                  reason: SAID,
+                  effectiveDate: lastWeek,
+                },
+              ],
+            }
+          : structured(text, name);
+    return model;
+  }
+
+  it("is read from an input's content, shown on the card and labelling the confirmed fact", async () => {
+    datingModel();
+
+    const proposal = await input(`記下：${SAID}`);
+    await request(app).post(`/api/proposals/${proposal.id}/confirm`);
+
+    expect(proposal.items).toEqual([
+      expect.objectContaining({
+        kind: "add",
+        content: RECYCLED,
+        effectiveAt: midnight(lastWeek),
+      }),
+    ]);
+    const [fact] = await knownFacts("R 是什麼？");
+    expect(fact.label).toBe(`知識庫 · ${lastWeek}`);
+  });
+
+  it("is read from a correction 「R 上週就改成回收率了」, the new fact holding from last week", async () => {
+    const model = datingModel();
+    const dated = model.structured;
+    model.structured = (text, name) =>
+      name === "extraction"
+        ? { facts: [{ content: "R 是取代率", validFrom: "2026-03-02" }] }
+        : dated(text, name);
+    const formula = await input(`記下：R 是取代率`);
+    await request(app).post(`/api/proposals/${formula.id}/confirm`);
+
+    const parts = await chat(SAID);
+    const card = parts.find((p) => p.type === "data-proposal")!
+      .data as Proposal;
+    await request(app).post(`/api/proposals/${card.id}/confirm`);
+
+    expect(card.items[0]).toMatchObject({
+      kind: "supersede",
+      content: RECYCLED,
+      effectiveAt: midnight(lastWeek),
+    });
+    const [fact] = await knownFacts("R 是什麼？");
+    expect(fact).toMatchObject({
+      text: RECYCLED,
+      label: `知識庫 · ${lastWeek}`,
+    });
+  });
+
+  it("lets a question about a past time be answered from what held then, with what changed since", async () => {
+    const { chat: model } = installStubModels();
+    model.reply = "三月時是 A = W × EF × R。[1]";
+    const OLD = "避免排放公式為 A = W × EF × R";
+    const NEW = "避免排放公式為 A = W × EF × R × L";
+    const structured = model.structured;
+    model.structured = (text, name) =>
+      name === "extraction"
+        ? { facts: [{ content: OLD, validFrom: "2026-03-02" }] }
+        : name === "correction"
+          ? {
+              corrections: [
+                {
+                  fact: 1,
+                  kind: "supersede",
+                  content: NEW,
+                  reason: "加入壽命比",
+                  effectiveDate: "2026-05-18",
+                },
+              ],
+            }
+          : structured(text, name);
+    const first = await input(`記下：${OLD}`);
+    await request(app).post(`/api/proposals/${first.id}/confirm`);
+    const parts = await chat("避免排放公式已經改成 A = W × EF × R × L");
+    const change = parts.find((p) => p.type === "data-proposal")!
+      .data as Proposal;
+    await request(app).post(`/api/proposals/${change.id}/confirm`);
+
+    const [fact] = await knownFacts("2026 年 3 月時避免排放公式是什麼？");
+
+    expect(fact).toMatchObject({
+      text: `${OLD}\n（之後的變更：2026-05-18 起改為「${NEW}」）`,
+      label: "知識庫 · 2026-03-02 起，2026-05-18 止",
+    });
+    expect(model.prompts.at(-1)).toContain("2026-05-18 起改為");
+    expect((await knownFacts("避免排放公式是什麼？"))[0].text).toBe(NEW);
+  });
+});
+
 describe("a correction in reply to an answer", () => {
   const RECYCLED =
     "我們目前的避免排放算法模型是 估算值 A = m × EF × 回收率 R × 壽命比 L";

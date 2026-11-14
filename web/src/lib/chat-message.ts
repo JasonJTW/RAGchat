@@ -68,7 +68,7 @@ export interface Proposal {
     /** The fact it replaces or marks 過時 (取代, 過時). */
     target?: { factId: string; content: string; validFrom: string };
     reason?: string;
-    /** When the change takes effect (取代, 過時). */
+    /** When the change takes effect (取代, 過時), or a 新增 fact became true. */
     effectiveAt?: string;
     /** The newer proposal whose confirmation expired it (已過期). */
     expiredBy?: string;

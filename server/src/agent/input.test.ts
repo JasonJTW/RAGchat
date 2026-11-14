@@ -146,6 +146,39 @@ describe("extract", () => {
     expect(chat.structuredPrompts[0]).not.toContain("請把以下內容輸入到知識庫");
   });
 
+  it("reads when each fact became true from the content, given today's date, and no later than now", async () => {
+    const { chat } = installStubModels();
+    chat.structured = () => ({
+      facts: [
+        { content: "R 上週改成回收率", validFrom: "2026-11-07" },
+        { content: "L 預設 0.5", validFrom: null },
+        { content: "T 自下週起扣除", validFrom: "2999-01-01" },
+        { content: "EF 表有誤", validFrom: "not a date" },
+      ],
+    });
+    const before = Date.now();
+
+    const { inputs } = await extract({
+      inputs: [
+        {
+          source: { kind: "message", content: "記下：R 上週就改成回收率了" },
+          chunks: [],
+          facts: [],
+        },
+      ],
+    });
+
+    const [dated, undated, future, malformed] = inputs[0].facts;
+    expect(dated.validFrom).toBe(
+      new Date("2026-11-07T00:00:00+08:00").toISOString(),
+    );
+    expect(undated.validFrom).toBeUndefined();
+    expect(malformed.validFrom).toBeUndefined();
+    expect(Date.parse(future.validFrom!)).toBeGreaterThanOrEqual(before);
+    expect(Date.parse(future.validFrom!)).toBeLessThanOrEqual(Date.now());
+    expect(chat.structuredPrompts[0]).toMatch(/今天：\d{4}-\d{2}-\d{2}/);
+  });
+
   it("drops blank facts", async () => {
     const { chat } = installStubModels();
     chat.structured = () => ({

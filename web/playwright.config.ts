@@ -39,6 +39,11 @@ const STUB_AUTH = {
   STUB_AUTH: "1",
   CLERK_SECRET_KEY: "",
   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "",
+  // A 訪客's human check is faked too (server/src/turnstile.ts): without a
+  // site key the web shows a button whose token the stub check passes.
+  STUB_TURNSTILE: "1",
+  NEXT_PUBLIC_TURNSTILE_SITE_KEY: "",
+  TURNSTILE_SECRET_KEY: "",
 };
 
 export default defineConfig({

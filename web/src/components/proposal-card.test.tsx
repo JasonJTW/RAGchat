@@ -1,8 +1,8 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Proposal } from "@/lib/chat-message";
-import { MeContext } from "./member-only";
 import { ProposalCard } from "./proposal-card";
+import { UserIdContext } from "./workspace-gate";
 
 type Item = Proposal["items"][number];
 
@@ -35,6 +35,21 @@ it("lists a few 新增 items open, each ticked", () => {
   for (const box of screen.getAllByRole("checkbox", { name: "納入" }))
     expect(box).toBeChecked();
   expect(screen.getByRole("button", { name: "確認" })).toBeEnabled();
+});
+
+it("shows when each 新增 fact took effect", () => {
+  render(
+    <ProposalCard
+      proposal={proposalOf([
+        { ...item(1), effectiveAt: "2026-11-06T16:00:00.000Z" },
+        item(2),
+      ])}
+    />,
+  );
+
+  const [dated, undated] = screen.getAllByRole("listitem");
+  expect(dated).toHaveTextContent("生效日期：2026-11-07");
+  expect(undated).not.toHaveTextContent("生效日期");
 });
 
 it("puts 取代 and 過時 first and open, folding many 新增 items", () => {
@@ -168,9 +183,9 @@ describe("entities", () => {
 describe("deleting its 來源", () => {
   const signedInAs = (userId: string, proposal: Proposal) =>
     render(
-      <MeContext.Provider value={{ userId, role: "member" }}>
+      <UserIdContext.Provider value={userId}>
         <ProposalCard proposal={proposal} />
-      </MeContext.Provider>,
+      </UserIdContext.Provider>,
     );
 
   it("lets the uploader hard-delete the source, after saying what goes", async () => {

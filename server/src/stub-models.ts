@@ -31,6 +31,8 @@ export interface StubChat {
   structured: (text: string, name?: string) => unknown;
   /** Each structured-output prompt, flattened like `prompts`. */
   structuredPrompts: string[];
+  /** The model id of each call (stream, invoke or structured), in order. */
+  models: string[];
 }
 
 /** The fake Jev's answer to every Noul and the state of each request. */
@@ -80,6 +82,7 @@ export function installStubModels(): {
             ? { links: [] }
             : sentencesAsFacts(text),
     structuredPrompts: [],
+    models: [],
   };
   const vectors = new Map<string, number[]>();
   globalThis.MODEL_STUBS = {
@@ -137,12 +140,14 @@ class StubChatModel extends BaseChatModel {
   // `chat.structured`.
   override withStructuredOutput(_schema: unknown, options?: { name?: string }) {
     return RunnableLambda.from((messages: BaseMessage[]) => {
+      this.chat.models.push(this.model);
       this.chat.structuredPrompts.push(flatten(messages));
       return this.chat.structured(messages.at(-1)?.text ?? "", options?.name);
     }) as unknown as ReturnType<BaseChatModel["withStructuredOutput"]>;
   }
 
   _generate(messages: BaseMessage[]): Promise<ChatResult> {
+    this.chat.models.push(this.model);
     this.chat.rewritePrompts.push(flatten(messages));
     const text = this.chat.rewrite;
     return Promise.resolve({
@@ -153,6 +158,7 @@ class StubChatModel extends BaseChatModel {
   async *_streamResponseChunks(
     messages: BaseMessage[],
   ): AsyncGenerator<ChatGenerationChunk> {
+    this.chat.models.push(this.model);
     this.chat.prompts.push(flatten(messages));
     for (const delta of this.chat.reply) {
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -204,14 +210,18 @@ function padded(vector: number[]): number[] {
       ];
 }
 
-// The default structured answer: every sentence of the text is a fact.
+// The default structured answer: every sentence of the text is a fact,
+// holding from the date it starts with 「YYYY-MM-DD 起」, if any.
 function sentencesAsFacts(text: string) {
   return {
     facts: text
       .split(/[。\n]+/)
       .map((sentence) => sentence.trim())
       .filter(Boolean)
-      .map((content) => ({ content })),
+      .map((content) => ({
+        content,
+        validFrom: /^(\d{4}-\d{2}-\d{2})\s*起/.exec(content)?.[1] ?? null,
+      })),
   };
 }
 

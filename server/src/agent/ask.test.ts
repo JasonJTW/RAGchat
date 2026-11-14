@@ -133,6 +133,130 @@ describe("retrieve", () => {
   });
 });
 
+describe("retrieve at a past time", () => {
+  const V1 = "避免排放公式為 A = W × EF × R";
+  const V2 = "避免排放公式為 A = W × EF × R × L";
+  const at = (date: string) => `${date}T00:00:00+08:00`;
+
+  it("draws on the facts that held then, each with its dates and what changed afterwards", async () => {
+    installStubModels();
+    const workspaceId = await createWorkspace("guest", "test");
+    const first = await propose(workspaceId, "user-a", {
+      source: { kind: "message", content: MESSAGE },
+      facts: [
+        { content: V1, validFrom: at("2026-03-02") },
+        { content: "每月寄報表給市府", validFrom: at("2026-03-02") },
+      ],
+    });
+    await confirmProposal(workspaceId, first.id, "user-b");
+    const change = await propose(workspaceId, "user-a", {
+      source: { kind: "message", content: "改了" },
+      facts: [],
+      corrections: [
+        {
+          kind: "supersede",
+          targetFactId: first.items[0].factId!,
+          content: V2,
+          reason: "加入壽命比",
+          effectiveAt: at("2026-05-18"),
+        },
+        {
+          kind: "obsolete",
+          targetFactId: first.items[1].factId!,
+          reason: "試辦結束",
+          effectiveAt: at("2026-06-30"),
+        },
+      ],
+    });
+    await confirmProposal(workspaceId, change.id, "user-b");
+
+    const { evidence, similarity } = await retrieve(
+      ask(workspaceId, "2026 年 3 月時我們的避免排放公式是什麼？"),
+    );
+
+    expect(evidence.map((e) => e.text)).toEqual(
+      expect.arrayContaining([
+        `${V1}\n（之後的變更：2026-05-18 起改為「${V2}」）`,
+        "每月寄報表給市府\n（之後的變更：2026-06-30 起不再適用）",
+      ]),
+    );
+    expect(evidence.map((e) => e.label)).toContain(
+      "知識庫 · 2026-03-02 起，2026-05-18 止",
+    );
+    expect(evidence.some((e) => e.text.startsWith(V2))).toBe(false);
+    expect(similarity).toBeGreaterThan(0);
+  });
+
+  it("keeps to the time a follow-up names, whatever the rewrite says", async () => {
+    const { chat } = installStubModels();
+    chat.rewrite = "避免排放公式是什麼？";
+    const workspaceId = await createWorkspace("guest", "test");
+    const first = await propose(workspaceId, "user-a", {
+      source: { kind: "message", content: MESSAGE },
+      facts: [{ content: V1, validFrom: at("2026-03-02") }],
+    });
+    await confirmProposal(workspaceId, first.id, "user-b");
+    const change = await propose(workspaceId, "user-a", {
+      source: { kind: "message", content: "改了" },
+      facts: [],
+      corrections: [
+        {
+          kind: "supersede",
+          targetFactId: first.items[0].factId!,
+          content: V2,
+          reason: "加入壽命比",
+          effectiveAt: at("2026-05-18"),
+        },
+      ],
+    });
+    await confirmProposal(workspaceId, change.id, "user-b");
+
+    const { evidence } = await retrieve({
+      workspaceId,
+      message: "那 2026 年 3 月時呢？",
+      turns: [
+        { role: "user", content: "避免排放公式是什麼？" },
+        { role: "assistant", content: V2 },
+      ],
+    });
+
+    expect(evidence.map((e) => e.text.split("\n")[0])).toEqual([V1]);
+  });
+
+  it("draws on no 待確認 fact for a past time", async () => {
+    installStubModels();
+    const workspaceId = await createWorkspace("guest", "test");
+    await propose(workspaceId, "user-a", {
+      source: { kind: "message", content: MESSAGE },
+      facts: [V1],
+    });
+
+    const past = await retrieve(
+      ask(workspaceId, "2026 年 3 月時的避免排放公式是什麼？"),
+    );
+    const now = await retrieve(ask(workspaceId, "避免排放公式是什麼？"));
+
+    expect(past.evidence).toEqual([]);
+    expect(now.evidence).toHaveLength(1);
+  });
+});
+
+describe("retrieve by keyword", () => {
+  it("covers a question naming a code a fact has, however its embedding compares", async () => {
+    const { vectors } = installStubModels();
+    const question = "EF-07 的係數是多少？";
+    const code = "類別 EF-07（家具）係數為 2.1";
+    vectors.set(question, [1, 0]);
+    vectors.set(code, [0, 1]);
+    const workspaceId = await workspaceWith(code);
+
+    const { evidence, similarity } = await retrieve(ask(workspaceId, question));
+
+    expect(evidence[0]?.text).toBe(code);
+    expect(similarity).toBeGreaterThanOrEqual(0.3);
+  });
+});
+
 describe("retrieve through entities", () => {
   /** Confirms each fact with the entities 「…」 names (the stub linker's way). */
   async function confirmLinked(workspaceId: string, ...contents: string[]) {

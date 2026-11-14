@@ -3,8 +3,12 @@ import {
   asc,
   cosineDistance,
   eq,
+  gt,
+  gte,
   inArray,
   isNull,
+  lt,
+  or,
   sql,
   type SQL,
 } from "drizzle-orm";
@@ -33,9 +37,10 @@ import {
   type Relink,
 } from "./entities.js";
 import { embeddings } from "./models.js";
+import type { Period } from "./periods.js";
 import { forgetUnused } from "./pseudonyms.js";
 
-export type { Mention, ProposalEntity, Relation, Relink };
+export type { Mention, Period, ProposalEntity, Relation, Relink };
 
 // 知識庫: sources, facts and the proposals that change them (ADR-0001). The
 // knowledge base proper is the current confirmed facts: confirmed, and not
@@ -68,7 +73,11 @@ export interface ProposalItem {
   target?: { factId: string; content: string; validFrom: string };
   /** Why the target changes (取代, 過時). */
   reason?: string;
-  /** When the change takes effect (取代, 過時): the target's end. */
+  /**
+   * When the change takes effect: for 取代 and 過時 the target's end, for
+   * 新增 when its fact became true (read from the content, else when the
+   * source was given).
+   */
   effectiveAt?: string;
   /** The newer proposal whose confirmation expired it (已過期). */
   expiredBy?: string;
@@ -130,11 +139,16 @@ export interface HistoryEntry {
   reason?: string;
 }
 
-/** A current confirmed fact that matches a query. */
+/**
+ * A confirmed fact that matches a query: a current one, or for a past
+ * period one that held then.
+ */
 export interface FactMatch {
   id: string;
   content: string;
   validFrom: string;
+  /** When it stopped holding (replaced or 過時); absent while current. */
+  validTo?: string;
   /** Cosine similarity of the fact to the query. */
   similarity: number;
   /** The member whose input proposed it. */
@@ -144,8 +158,9 @@ export interface FactMatch {
   /** Present when a member edited the fact's text inline. */
   edited?: Edited;
   /**
-   * The versions it replaced, oldest first, ending with itself; present
-   * only when it replaced one (e.g. 取代率 → 回收率 → 取代率).
+   * Its whole history chain, oldest first: the versions it replaced, itself,
+   * and those that replaced it since; present only when there is more than
+   * itself (e.g. 取代率 → 回收率 → 取代率).
    */
   history?: HistoryEntry[];
   /**
@@ -188,6 +203,11 @@ export type FactDraft =
       entities?: Mention[];
       /** Relations it states between those entities (by index). */
       relations?: Relation[];
+      /**
+       * When it became true (ISO), when the content says; else it holds
+       * from when the source was given.
+       */
+      validFrom?: string;
     };
 
 /** A change to a current fact proposed by a correction. */
@@ -201,6 +221,16 @@ export type Correction = {
 
 // A fact in the knowledge base now: confirmed, and not replaced or 過時.
 const current = and(eq(facts.status, "confirmed"), isNull(facts.validTo));
+
+// A confirmed fact that held at some time in the period, or a current one.
+function held(during?: Period): SQL | undefined {
+  if (!during) return current;
+  return and(
+    eq(facts.status, "confirmed"),
+    lt(facts.validFrom, during.to),
+    or(isNull(facts.validTo), gt(facts.validTo, during.from)),
+  );
+}
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -221,9 +251,13 @@ export async function propose(
   workspaceId: string,
   userId: string,
   input: {
-    source:
+    source: (
       | { kind: "message"; content: string }
-      | { kind: "file"; filename: string; content: string };
+      | { kind: "file"; filename: string; content: string }
+    ) & {
+      /** When it was given; now by default (the 示範資料 gives its own). */
+      createdAt?: Date;
+    };
     chunks?: SourceChunk[];
     facts: FactDraft[];
     corrections?: Correction[];
@@ -244,7 +278,15 @@ export async function propose(
         : [],
     ),
     ...input.facts.map((fact) =>
-      typeof fact === "string" ? { content: fact } : fact,
+      typeof fact === "string"
+        ? { content: fact }
+        : {
+            ...fact,
+            validFrom:
+              fact.validFrom === undefined
+                ? undefined
+                : new Date(fact.validFrom),
+          },
     ),
   ];
   const model = embeddings();
@@ -300,9 +342,9 @@ export async function propose(
                 content: fact.content,
                 embedding: vectors[i],
                 embeddingModel: model.model,
-                // Until dates are read from the content (#32), a new fact
-                // holds from when its source was given; a replacement from
-                // when the correction took effect.
+                // A new fact holds from the date its content gives, else
+                // from when its source was given; a replacement from when
+                // the correction took effect.
                 validFrom: fact.validFrom ?? source.createdAt,
                 createdBy: userId,
               })),
@@ -1104,6 +1146,7 @@ async function itemsOf(tx: Tx, proposalId: string): Promise<ProposalItem[]> {
       proposalStatus: proposals.status,
       factId: proposalItems.factId,
       content: facts.content,
+      validFrom: facts.validFrom,
       originalContent: facts.originalContent,
       editedBy: facts.editedBy,
       targetFactId: target.id,
@@ -1140,22 +1183,27 @@ async function itemsOf(tx: Tx, proposalId: string): Promise<ProposalItem[]> {
       },
     }),
     ...(row.reason != null && { reason: row.reason }),
-    ...(row.effectiveAt != null && {
-      effectiveAt: row.effectiveAt.toISOString(),
-    }),
+    ...(row.effectiveAt != null
+      ? { effectiveAt: row.effectiveAt.toISOString() }
+      : row.kind === "add" &&
+        row.validFrom != null && {
+          effectiveAt: row.validFrom.toISOString(),
+        }),
     ...(row.expiredBy != null && { expiredBy: row.expiredBy }),
   }));
 }
 
 /**
  * The current confirmed facts most similar to the query, best first, each
- * with its history chain when it replaced another. Facts embedded by another
- * model than EMBEDDING_MODEL can't be compared and are skipped.
+ * with its history chain when it has one; for a past period, the facts that
+ * held then. Facts embedded by another model than EMBEDDING_MODEL can't be
+ * compared and are skipped.
  */
 export async function searchFacts(
   workspaceId: string,
   query: string,
   limit: number,
+  during?: Period,
 ): Promise<FactMatch[]> {
   const model = embeddings();
   const vector = await model.embedQuery(query);
@@ -1164,10 +1212,87 @@ export async function searchFacts(
     vector,
     eq(facts.embeddingModel, model.model),
     limit,
+    during,
   );
 }
 
-/** A current confirmed fact the entity graph reached from a query. */
+/** A fact the keyword lane found. */
+export type KeywordMatch = FactMatch & {
+  /** pg_trgm word similarity of the query to the fact's best-matching words. */
+  keyword: number;
+};
+
+// Below this word similarity a fact shares no term with the query.
+const MIN_KEYWORD = 0.2;
+
+/**
+ * The current confirmed facts (for a past period, those that held then)
+ * that share the query's terms, best first by pg_trgm word similarity: a
+ * name or code (「EF-07」「PR #128」) an embedding blurs. Any embedding
+ * model's facts count.
+ */
+export async function searchKeyword(
+  workspaceId: string,
+  query: string,
+  limit: number,
+  during?: Period,
+): Promise<KeywordMatch[]> {
+  const keyword = sql<number>`word_similarity(${query}, ${facts.content})`;
+  const rows = await db
+    .select({ id: facts.id, keyword })
+    .from(facts)
+    .where(
+      and(
+        eq(facts.workspaceId, workspaceId),
+        held(during),
+        gte(keyword, MIN_KEYWORD),
+      ),
+    )
+    .orderBy(sql`${keyword} desc`, asc(facts.id))
+    .limit(limit);
+  if (!rows.length) return [];
+  const scores = new Map(rows.map((row) => [row.id, Number(row.keyword)]));
+  const model = embeddings();
+  const vector = await model.embedQuery(query);
+  const matches = await factMatches(
+    workspaceId,
+    vector,
+    inArray(facts.id, [...scores.keys()]),
+    limit,
+    during,
+  );
+  return matches
+    .map((match) => ({ ...match, keyword: scores.get(match.id)! }))
+    .sort((a, b) => b.keyword - a.keyword);
+}
+
+/**
+ * The time lane: of the facts that held in the period, those that began or
+ * ended in it (what changed then), most similar to the query first.
+ */
+export async function searchChanges(
+  workspaceId: string,
+  query: string,
+  limit: number,
+  during: Period,
+): Promise<FactMatch[]> {
+  const model = embeddings();
+  const vector = await model.embedQuery(query);
+  const within = (column: typeof facts.validFrom | typeof facts.validTo) =>
+    and(gte(column, during.from), lt(column, during.to));
+  return factMatches(
+    workspaceId,
+    vector,
+    and(
+      eq(facts.embeddingModel, model.model),
+      or(within(facts.validFrom), within(facts.validTo)),
+    ),
+    limit,
+    during,
+  );
+}
+
+/** A confirmed fact the entity graph reached from a query. */
 export type GraphMatch = FactMatch & {
   /** Relations walked from an entity the query names (0: it speaks of one). */
   hops: number;
@@ -1180,15 +1305,22 @@ const GRAPH_CANDIDATES = 50;
  * The current confirmed facts that speak of an entity the query names (by
  * its name or an alias), or of an entity related to one within two hops
  * through relations current facts state: fewest hops first, then most
- * similar to the query.
+ * similar to the query. For a past period, the facts and relations that
+ * held then.
  */
 export async function searchGraph(
   workspaceId: string,
   query: string,
   limit: number,
+  during?: Period,
 ): Promise<GraphMatch[]> {
   const seeds = await entitiesNamedIn(workspaceId, query);
-  const reached = await graphFacts(workspaceId, seeds, GRAPH_CANDIDATES);
+  const reached = await graphFacts(
+    workspaceId,
+    seeds,
+    GRAPH_CANDIDATES,
+    during,
+  );
   if (!reached.length) return [];
   const hops = new Map(reached.map((r) => [r.factId, r.hops]));
   const model = embeddings();
@@ -1198,6 +1330,7 @@ export async function searchGraph(
     vector,
     inArray(facts.id, [...hops.keys()]),
     GRAPH_CANDIDATES,
+    during,
   );
   return matches
     .map((match) => ({ ...match, hops: hops.get(match.id)! }))
@@ -1205,13 +1338,15 @@ export async function searchGraph(
     .slice(0, limit);
 }
 
-// The current confirmed facts matching the filter, most similar to the
-// vector first, with their sources and history chains.
+// The current confirmed facts (for a period, those that held then)
+// matching the filter, most similar to the vector first, with their sources
+// and history chains.
 async function factMatches(
   workspaceId: string,
   vector: number[],
   filter: SQL | undefined,
   limit: number,
+  during?: Period,
 ): Promise<FactMatch[]> {
   const similarity = sql<number>`1 - (${cosineDistance(facts.embedding, vector)})`;
   const rows = await db
@@ -1219,6 +1354,7 @@ async function factMatches(
       id: facts.id,
       content: facts.content,
       validFrom: facts.validFrom,
+      validTo: facts.validTo,
       similarity,
       createdBy: facts.createdBy,
       confirmedBy: facts.confirmedBy,
@@ -1233,7 +1369,7 @@ async function factMatches(
     .from(facts)
     .innerJoin(sources, eq(sources.id, facts.sourceId))
     .leftJoin(sourceChunks, eq(sourceChunks.id, facts.chunkId))
-    .where(and(eq(facts.workspaceId, workspaceId), current, filter))
+    .where(and(eq(facts.workspaceId, workspaceId), held(during), filter))
     .orderBy(cosineDistance(facts.embedding, vector))
     .limit(limit);
   const histories = await historiesOf(
@@ -1246,6 +1382,7 @@ async function factMatches(
       id: row.id,
       content: row.content,
       validFrom: row.validFrom.toISOString(),
+      ...(row.validTo && { validTo: row.validTo.toISOString() }),
       similarity: Number(row.similarity),
       createdBy: row.createdBy,
       confirmedBy: row.confirmedBy ?? "",
@@ -1445,9 +1582,10 @@ export async function searchChunks(
 // How far back a history chain is followed; a guard, never reached in use.
 const MAX_HISTORY = 50;
 
-// Each fact's history chain, oldest first, ending with the fact: the facts
-// it replaced, followed back through `superseded_by`. A fact replaces at most
-// one other (one 取代 item creates it), so each chain is a line.
+// Each fact's history chain, oldest first: the facts it replaced, followed
+// back through `superseded_by`, the fact, and those that replaced it since.
+// A fact replaces at most one other (one 取代 item creates it) and is
+// replaced by at most one, so each chain is a line.
 async function historiesOf(
   workspaceId: string,
   ids: string[],
@@ -1474,10 +1612,25 @@ async function historiesOf(
         on earlier.superseded_by = chain.id
         and earlier.workspace_id = ${workspaceId}
       where chain.depth < ${MAX_HISTORY}
+    ), later (root, id, depth) as (
+      select id, superseded_by, -1 from facts
+      where workspace_id = ${workspaceId} and superseded_by is not null
+        and id in (${sql.join(
+          ids.map((id) => sql`${id}::uuid`),
+          sql`, `,
+        )})
+      union all
+      select later.root, next.superseded_by, later.depth - 1
+      from later join facts next
+        on next.id = later.id and next.superseded_by is not null
+        and next.workspace_id = ${workspaceId}
+      where later.depth > ${-MAX_HISTORY}
+    ), whole as (
+      select * from chain union all select * from later
     )
     select chain.root, facts.id, facts.content, facts.valid_from,
       facts.valid_to, item.reason
-    from chain
+    from whole chain
     join facts on facts.id = chain.id
     left join proposal_items item
       on item.fact_id = facts.id and item.kind = 'supersede'

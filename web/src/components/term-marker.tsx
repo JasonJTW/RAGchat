@@ -3,14 +3,16 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useRole } from "@/components/workspace-gate";
 
 /**
  * Marks a term 敏感 (pseudonymised in all later input) or 不敏感 (a 排除詞,
  * never pseudonymised), e.g. a nickname detection missed or a word it took
- * for a name. Shown on a pending 提案 card, folded. Text already stored keeps
- * what it had.
+ * for a name. Shown on a pending 提案 card, folded, to 成員 only. Text
+ * already stored keeps what it had.
  */
 export function TermMarker() {
+  const role = useRole();
   const [term, setTerm] = useState("");
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState("");
@@ -46,6 +48,8 @@ export function TermMarker() {
     }
   }
 
+  // A 訪客's trial is not de-identified: there is nothing to mark.
+  if (role === "guest") return null;
   const blank = !term.trim();
   return (
     <details className="mt-3 text-sm">

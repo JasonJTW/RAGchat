@@ -2,25 +2,35 @@ import { asc, eq, sql } from "drizzle-orm";
 import type { Request } from "express";
 import { identify } from "./auth.js";
 import { db } from "./db.js";
+import { trialOf } from "./trial.js";
 import { workspaces } from "./db/schema.js";
 
 // Who is calling and in which 工作區. A 成員 works in the team workspace; a
-// 訪客 has no workspace until guest trials open (#38).
+// 訪客 in their own 試用工作區 (trial.ts), once they passed the human check.
 
-/** The member a request acts as, and the workspace it is limited to. */
+/** The user a request acts as, and the workspace it is limited to. */
 export interface Caller {
   workspaceId: string;
   userId: string;
+  /** A 訪客 is held to the trial's limits and answered by GUEST_MODEL. */
+  role?: "member" | "guest";
 }
 
-/** The caller of a request, or why it has no workspace to act in. */
+/**
+ * The caller of a request, or why it has no workspace to act in: nobody
+ * signed in, or a 訪客 who has not passed the human check (today).
+ */
 export async function callerOf(
   req: Request,
-): Promise<Caller | "signed out" | "guest"> {
+): Promise<Caller | "signed out" | "unverified"> {
   const identity = await identify(req);
   if (!identity) return "signed out";
-  if (identity.role !== "member") return "guest";
-  return { workspaceId: await teamWorkspace(), userId: identity.userId };
+  const { userId, role } = identity;
+  if (role === "member")
+    return { workspaceId: await teamWorkspace(), userId, role };
+  const trial = await trialOf(userId);
+  if (trial === "unverified") return trial;
+  return { workspaceId: trial.workspaceId, userId, role };
 }
 
 /** Creates a workspace and returns its id. */

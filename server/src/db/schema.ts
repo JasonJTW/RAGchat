@@ -1,6 +1,7 @@
 import {
   type AnyPgColumn,
   boolean,
+  date,
   index,
   integer,
   jsonb,
@@ -14,7 +15,7 @@ import {
   vector,
 } from "drizzle-orm/pg-core";
 
-// The knowledge base's tables. Every table but this one carries a
+// The knowledge base's tables. Every table but this one and guest_usage carries a
 // `workspace_id`, so one workspace never sees another's rows (see GLOSSARY.md).
 // Change a table here, then `npm run db:generate -w server` writes the
 // migration under server/drizzle/.
@@ -22,7 +23,15 @@ import {
 /** The length of every stored embedding (EMBEDDING_MODEL's output). */
 export const EMBEDDING_DIMENSIONS = 1536;
 
-export const workspaceKind = pgEnum("workspace_kind", ["team", "guest"]);
+/**
+ * `demo` is the template every 試用工作區 is copied from: the 示範資料, built
+ * once per embedding model (see demo-seed.ts). Nobody works in it.
+ */
+export const workspaceKind = pgEnum("workspace_kind", [
+  "team",
+  "guest",
+  "demo",
+]);
 
 /** 工作區: the team's one workspace, or a guest's trial workspace. */
 export const workspaces = pgTable("workspaces", {
@@ -32,7 +41,28 @@ export const workspaces = pgTable("workspaces", {
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
+  /** The 訪客 whose 試用工作區 it is; null for the team and the template. */
+  ownerId: text("owner_id").unique(),
+  /** A trial's last request; idle for 7 days, it is deleted. */
+  lastActiveAt: timestamp("last_active_at", { withTimezone: true }),
+  /** Until when the trial's 訪客 counts as human (Turnstile). */
+  verifiedUntil: timestamp("verified_until", { withTimezone: true }),
 });
+
+/**
+ * What a 訪客 used on one day (Asia/Taipei): messages and uploaded files.
+ * The row with `user_id = '*'` counts every 訪客 together.
+ */
+export const guestUsage = pgTable(
+  "guest_usage",
+  {
+    userId: text("user_id").notNull(),
+    day: date("day").notNull(),
+    messages: integer("messages").notNull().default(0),
+    uploads: integer("uploads").notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.day] })],
+);
 
 const workspaceId = () =>
   uuid("workspace_id")
@@ -150,6 +180,8 @@ export const facts = pgTable(
     index("facts_workspace_status").on(t.workspaceId, t.status),
     index("facts_superseded_by").on(t.supersededBy),
     index("facts_embedding").using("hnsw", t.embedding.op("vector_cosine_ops")),
+    index("facts_content_trgm").using("gin", t.content.op("gin_trgm_ops")),
+    index("facts_validity").on(t.workspaceId, t.validFrom, t.validTo),
   ],
 );
 

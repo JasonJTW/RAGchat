@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { useMe } from "@/components/member-only";
 import { TermMarker } from "@/components/term-marker";
+import { useUserId } from "@/components/workspace-gate";
 import type { Conflict, Proposal, ProposalEntity } from "@/lib/chat-message";
 import { teamDate } from "@/lib/team-date";
 
@@ -48,7 +48,7 @@ type Item = Proposal["items"][number];
  * hard-deleted, the card shows only that.
  */
 export function ProposalCard({ proposal }: { proposal: Proposal }) {
-  const me = useMe();
+  const userId = useUserId();
   const [deleted, setDeleted] = useState(false);
   if (deleted)
     return (
@@ -65,7 +65,7 @@ export function ProposalCard({ proposal }: { proposal: Proposal }) {
     <LiveCard
       proposal={proposal}
       deleter={
-        proposal.sourceId && me?.userId === proposal.createdBy ? (
+        proposal.sourceId && userId === proposal.createdBy ? (
           <SourceDeleter
             sourceId={proposal.sourceId}
             onDeleted={() => setDeleted(true)}
@@ -491,7 +491,7 @@ function ItemRow({
               )}
             </Labelled>
           ))}
-        {item.target && (
+        {(item.target || item.effectiveAt) && (
           <p className="text-xs text-zinc-500">
             {item.reason && <>原因：{item.reason} · </>}
             {item.effectiveAt && <>生效日期：{teamDate(item.effectiveAt)}</>}
