@@ -17,6 +17,14 @@ const nextConfig: NextConfig = {
     const server = process.env.SERVER_URL ?? "http://localhost:4000";
     return [{ source: "/api/:path*", destination: `${server}/api/:path*` }];
   },
+  experimental: {
+    // The proxy cuts a response that sends nothing for this long: an input
+    // streams nothing while the models read a long file (minutes), so the
+    // default 30 s cut the chat off (送出失敗). And as large a body as the
+    // server's chat accepts (CHAT_BODY_LIMIT, attachments as data URLs).
+    proxyTimeout: 10 * 60_000,
+    proxyClientMaxBodySize: "20mb",
+  },
   cacheComponents: true,
   partialPrefetching: true,
   turbopack: {
