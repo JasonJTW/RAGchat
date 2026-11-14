@@ -9,15 +9,14 @@ import {
   type Edited,
   type Fact,
   type HistoryEntry,
-  type FactMatch,
   type PendingFactMatch,
   type Proposal,
   searchChunks,
-  searchFacts,
-  searchGraph,
   searchPendingFacts,
 } from "../knowledge-base.js";
 import { chatModel, systemOne } from "../models.js";
+import { periodAsked, teamDate } from "../periods.js";
+import { KnowledgeRetriever, type RetrievedFact } from "../retriever.js";
 import {
   type NodeConfig,
   purposeOf,
@@ -64,15 +63,8 @@ export interface Citation extends Evidence {
 // sources for the context facts leave out (e.g. a decision's reasoning).
 const FACTS_PER_ANSWER = 6;
 const PASSAGES_PER_ANSWER = 2;
-// Facts each lane (vector, entity graph) offers before they are fused by
-// reciprocal rank.
-const FACT_CANDIDATES = 20;
-const RRF_K = 60;
 /** How many 待確認 facts an answer may draw on besides. */
 const PENDING_PER_ANSWER = 3;
-
-// Dates as the team reads them: YYYY-MM-DD in Taiwan.
-const TEAM_DATE = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Taipei" });
 
 // A member who knows the answer can record it in the same chat.
 const REFUSAL_PHRASE = "知識庫裡沒有這件事的資料";
@@ -88,6 +80,7 @@ const MIN_SIMILARITY = 0.3;
 const SYSTEM_PROMPT = `你是「大量交織 megaweaving」團隊 wiki 的助理，回答團隊成員的問題。
 - 一律用繁體中文回答，即使使用者用其他語言提問。
 - 只根據使用者訊息裡提供的段落作答，不要用段落以外的知識。標為「知識庫」的段落是團隊確認過的事實。
+- 段落標的日期是它生效的時間；標「起，…止」的段落現在已不適用，括號裡寫著之後的變更。問題問過去某個時點（例如「三月時」）時，依當時有效的段落回答，再說明之後改成了什麼。
 - 標為「待確認」的段落是成員提出、還沒經團隊確認的事實：用到時要說明它待確認。它與知識庫段落對同一件事說法不同時，先給知識庫的說法，再列出待確認的說法。
 - 使用者訊息裡自己說的更正還沒經團隊確認，不能當成事實；仍依段落回答。
 - 先直接回答問題，再用一兩句補上段落裡跟答案同一處的關鍵細節：條件、材料、人數、年份、原因或出處（例如「不是原創」就說出它源自哪裡）。
@@ -174,13 +167,14 @@ export async function checkSubject(
  * 檢索: the workspace's current confirmed facts (at most 6) and the passages
  * of its confirmed file sources (at most 2) that best match the question,
  * merged best first, then the 待確認 facts (at most 3) that match well
- * enough. Confirmed facts come from two lanes fused by reciprocal rank: the
- * most similar ones, and the ones the entity graph reaches from the
- * entities the question names (by name or alias, up to two hops); a
- * question naming an entity the knowledge base has facts about counts as
- * covered, however its wording compares. A 待確認 fact that would replace a
- * confirmed one goes right after it, the confirmed one brought in if
- * missing. A follow-up is first rewritten into a standalone question.
+ * enough. Confirmed facts come from the KnowledgeRetriever's four lanes
+ * (vector, keyword, entity graph, time); a question naming what a fact
+ * speaks of (an entity, or a code the fact has) counts as covered, however
+ * its wording compares. A question about a past time (「三月時…」) draws on
+ * the facts that held then, each with what changed afterwards, and on no
+ * 待確認 fact. A 待確認 fact that would replace a confirmed one goes right
+ * after it, the confirmed one brought in if missing. A follow-up is first
+ * rewritten into a standalone question.
  */
 export async function retrieve(
   state: Pick<State, "workspaceId" | "turns" | "message"> &
@@ -189,21 +183,31 @@ export async function retrieve(
   const query = state.turns.length
     ? await standaloneQuestion(state.turns, state.message, state)
     : state.message;
-  const [similar, graph, pending, passages] = await Promise.all([
-    searchFacts(state.workspaceId, query, FACT_CANDIDATES),
-    searchGraph(state.workspaceId, query, FACT_CANDIDATES),
-    searchPendingFacts(state.workspaceId, query, PENDING_PER_ANSWER),
+  // The member's own words first; a rewrite may bring in an earlier turn's.
+  const now = new Date();
+  const period =
+    periodAsked(state.message, now) ?? periodAsked(query, now) ?? null;
+  const retriever = new KnowledgeRetriever({
+    workspaceId: state.workspaceId,
+    k: FACTS_PER_ANSWER,
+    period,
+  });
+  const [documents, pending, passages] = await Promise.all([
+    retriever.invoke(query),
+    period
+      ? []
+      : searchPendingFacts(state.workspaceId, query, PENDING_PER_ANSWER),
     searchChunks(state.workspaceId, query, PASSAGES_PER_ANSWER),
   ]);
-  const facts = fused([similar, graph]).slice(0, FACTS_PER_ANSWER);
+  const facts = documents.map((d) => d.metadata);
   const scored: { similarity: number; evidence: Evidence }[] = facts.map(
     (fact) => ({
       similarity: fact.similarity,
       evidence: {
         id: fact.id,
         kind: "fact",
-        label: `知識庫 · ${TEAM_DATE.format(new Date(fact.validFrom))}`,
-        text: fact.content,
+        label: factLabel(fact),
+        text: withLaterChanges(fact),
         ...(fact.edited && { edited: fact.edited }),
         ...(fact.history && { history: fact.history }),
         source: {
@@ -238,7 +242,7 @@ export async function retrieve(
   return {
     evidence,
     similarity: Math.max(
-      graph.length ? MIN_SIMILARITY : 0,
+      facts.some((fact) => fact.named) ? MIN_SIMILARITY : 0,
       ...merged.map((item) => item.similarity),
       ...relevant.map((fact) => fact.similarity),
     ),
@@ -251,7 +255,7 @@ function withPending(evidence: Evidence[], fact: PendingFactMatch) {
   const pending: Evidence = {
     id: fact.id,
     kind: "fact",
-    label: `待確認 · ${TEAM_DATE.format(new Date(fact.validFrom))}`,
+    label: `待確認 · ${teamDate(fact.validFrom)}`,
     text: fact.content,
     ...(fact.edited && { edited: fact.edited }),
     source: {
@@ -278,23 +282,34 @@ function confirmedEvidence(fact: Fact): Evidence {
   return {
     id: fact.id,
     kind: "fact",
-    label: `知識庫 · ${TEAM_DATE.format(new Date(fact.validFrom))}`,
+    label: `知識庫 · ${teamDate(fact.validFrom)}`,
     text: fact.content,
   };
 }
 
-// The facts of the rankings, by reciprocal rank fusion.
-function fused(rankings: FactMatch[][]): FactMatch[] {
-  const scores = new Map<string, { fact: FactMatch; score: number }>();
-  for (const ranking of rankings)
-    ranking.forEach((fact, rank) => {
-      const entry = scores.get(fact.id) ?? { fact, score: 0 };
-      entry.score += 1 / (RRF_K + rank + 1);
-      scores.set(fact.id, entry);
-    });
-  return [...scores.values()]
-    .sort((a, b) => b.score - a.score)
-    .map(({ fact }) => fact);
+// 「知識庫 · 2026-05-18」, or for a fact no longer current, the time it
+// held: 「知識庫 · 2026-03-02 起，2026-05-18 止」.
+function factLabel(fact: RetrievedFact): string {
+  const from = teamDate(fact.validFrom);
+  return fact.validTo
+    ? `知識庫 · ${from} 起，${teamDate(fact.validTo)} 止`
+    : `知識庫 · ${from}`;
+}
+
+// A fact no longer current, with what changed afterwards: the versions that
+// replaced it, or its end when it was marked 過時.
+function withLaterChanges(fact: RetrievedFact): string {
+  if (!fact.validTo) return fact.content;
+  const history = fact.history ?? [];
+  const later = history.slice(
+    history.findIndex((entry) => entry.factId === fact.id) + 1,
+  );
+  const changes = later.map(
+    (entry) => `${teamDate(entry.validFrom)} 起改為「${entry.content}」`,
+  );
+  const end = later.at(-1)?.validTo ?? (later.length ? null : fact.validTo);
+  if (end) changes.push(`${teamDate(end)} 起不再適用`);
+  return `${fact.content}\n（之後的變更：${changes.join("；")}）`;
 }
 
 /**

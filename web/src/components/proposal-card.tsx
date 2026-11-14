@@ -393,7 +393,7 @@ function ItemRow({
               )}
             </Labelled>
           ))}
-        {item.target && (
+        {(item.target || item.effectiveAt) && (
           <p className="text-xs text-zinc-500">
             {item.reason && <>原因：{item.reason} · </>}
             {item.effectiveAt && <>生效日期：{teamDate(item.effectiveAt)}</>}

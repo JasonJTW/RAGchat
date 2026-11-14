@@ -210,14 +210,18 @@ function padded(vector: number[]): number[] {
       ];
 }
 
-// The default structured answer: every sentence of the text is a fact.
+// The default structured answer: every sentence of the text is a fact,
+// holding from the date it starts with 「YYYY-MM-DD 起」, if any.
 function sentencesAsFacts(text: string) {
   return {
     facts: text
       .split(/[。\n]+/)
       .map((sentence) => sentence.trim())
       .filter(Boolean)
-      .map((content) => ({ content })),
+      .map((content) => ({
+        content,
+        validFrom: /^(\d{4}-\d{2}-\d{2})\s*起/.exec(content)?.[1] ?? null,
+      })),
   };
 }
 

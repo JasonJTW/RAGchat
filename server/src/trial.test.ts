@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { app } from "./app.js";
 import type { Citation } from "./chat.js";
 import type { Proposal } from "./knowledge-base.js";
+import { embeddings } from "./models.js";
 import { installStubModels } from "./stub-models.js";
 import { stubSession } from "./stub-auth.js";
 import { db } from "./db.js";
@@ -17,6 +18,10 @@ import { deleteIdleTrials } from "./trial.js";
 
 // 訪客試用 through the HTTP API, signed in by stub cookies. Each test signs in
 // as new 訪客 (a random user id), so each gets a trial workspace of its own.
+
+/** The 示範資料's first formula, from 2026-03-02 until 2026-05-18. */
+const V1_FORMULA =
+  "避免排放公式為 A = W × EF × R（A：每筆交換的避免排放量 kgCO2e；W：物品重量 kg；EF：類別新品生產排放係數；R：取代率）";
 
 /** The current avoided-emissions formula after the 示範資料 seed. */
 const CURRENT_FORMULA = "避免排放公式為 A = W × EF × R × L";
@@ -98,6 +103,27 @@ describe("a 訪客's trial workspace", () => {
       expect.stringContaining("A = W × EF × R × L"),
     ]);
     expect(cited.history?.[1].validFrom).toBe("2026-05-17T16:00:00.000Z");
+  });
+
+  it("answers 「2026 年三月時我們的避免排放公式是什麼？」 with the formula of then, and what changed since", async () => {
+    const question = "2026 年三月時我們的避免排放公式是什麼？";
+    const models = installStubModels();
+    models.chat.reply = "見 [1][2][3][4][5][6]";
+    // As a real embedding would, the question points at the formula.
+    models.vectors.set(question, await embeddings().embedQuery(V1_FORMULA));
+    const guest = await verifiedGuest();
+
+    const cited = await citedFacts(guest, question);
+
+    const texts = cited.map((c) => c.text);
+    expect(texts).toContainEqual(
+      expect.stringMatching(
+        /A = W × EF × R（[\s\S]*之後的變更：2026-05-18 起改為「.*A = W × EF × R × L/,
+      ),
+    );
+    expect(texts).not.toContainEqual(
+      expect.stringMatching(/^[^\n]*A = W × EF × R × L/),
+    );
   });
 });
 

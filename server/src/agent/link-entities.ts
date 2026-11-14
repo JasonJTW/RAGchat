@@ -23,6 +23,8 @@ import type { Caller } from "../workspaces.js";
 export interface LinkedFact {
   content: string;
   chunk?: number;
+  /** When it became true (ISO), when the content says. */
+  validFrom?: string;
   entities?: Mention[];
   relations?: Relation[];
 }

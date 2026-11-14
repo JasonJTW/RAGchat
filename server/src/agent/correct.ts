@@ -8,6 +8,7 @@ import {
   searchFacts,
 } from "../knowledge-base.js";
 import { chatModel } from "../models.js";
+import { teamDate, teamMidnight } from "../periods.js";
 import { type NodeConfig, purposeOf, type State, writeText } from "./state.js";
 
 // The 修正 branch: a member says a fact is wrong or no longer holds
@@ -81,9 +82,6 @@ const Drafted = z.object({
     .describe("更正要做的每一項修改"),
 });
 
-// Dates as the team reads them: YYYY-MM-DD in Taiwan.
-const TEAM_DATE = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Taipei" });
-
 /**
  * 起草修正: what the correction changes in the candidates, as the extraction
  * model reads it. The model can only point at a candidate by number, so a
@@ -108,7 +106,7 @@ export async function draftCorrection(
               .map((fact, i) => `[${i + 1}] ${fact.content}`)
               .join(
                 "\n",
-              )}\n\n今天：${TEAM_DATE.format(now)}\n\n成員的更正：${state.correction}`,
+              )}\n\n今天：${teamDate(now)}\n\n成員的更正：${state.correction}`,
           ),
         ],
         { signal: config.signal },
@@ -138,9 +136,7 @@ export async function draftCorrection(
 // The date as midnight in Taiwan, kept between when the target began to hold
 // and now; no date, or one that doesn't parse, is now.
 function effectiveAt(date: string | null, target: Fact, now: Date): string {
-  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(date ?? "")
-    ? Date.parse(`${date}T00:00:00+08:00`)
-    : NaN;
+  const parsed = teamMidnight(date);
   const at = Number.isNaN(parsed)
     ? now.getTime()
     : Math.min(Math.max(parsed, Date.parse(target.validFrom)), now.getTime());
