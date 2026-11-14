@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import useSWR from "swr";
 import { HumanCheck } from "@/components/human-check";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,14 @@ async function fetchMe(url: string): Promise<Me | null> {
 export function useMe() {
   return useSWR("/api/me", fetchMe);
 }
+
+/**
+ * The role of whoever the gate let in, for what only one role sees (a
+ * 訪客's trial is not de-identified, so it has no 敏感詞). Outside a gate, a
+ * 成員.
+ */
+export const RoleContext = createContext<Me["role"]>("member");
+export const useRole = () => useContext(RoleContext);
 
 /**
  * Shows its children to whoever has a workspace: a 成員 (the team's), or a
@@ -60,10 +68,10 @@ export function WorkspaceGate({ children }: { children: ReactNode }) {
       </section>
     );
   return (
-    <>
+    <RoleContext.Provider value="guest">
       <TrialBanner />
       {children}
-    </>
+    </RoleContext.Provider>
   );
 }
 

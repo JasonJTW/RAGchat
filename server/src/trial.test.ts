@@ -521,3 +521,67 @@ describe("copying the 示範資料 into a trial", () => {
     }
   });
 });
+
+describe("a 訪客's trial and de-identification (#34)", () => {
+  const PHONE = "0912-345-678";
+
+  it("is not de-identified: an input keeps its values, and no pseudonym is made", async () => {
+    const userId = newGuest();
+    const guest = await verifiedGuest(userId);
+
+    const { parts } = await chat(
+      guest,
+      `請把以下內容輸入到知識庫：林小樹的電話是 ${PHONE}`,
+    );
+
+    const card = parts.find((p) => p.type === "data-proposal")!
+      .data as Proposal;
+    expect(card.items[0].content).toContain(PHONE);
+    expect(card.items[0].content).not.toContain("〔");
+    expect(await rowsOf("pseudonyms", await trialIdOf(userId))).toBe(0);
+  });
+
+  it("has no 敏感詞 or 排除詞 list: /api/terms is for 成員 only", async () => {
+    const guest = await verifiedGuest();
+
+    const put = await guest
+      .put("/api/terms")
+      .send({ term: "林小樹", sensitive: true });
+    const get = await guest.get("/api/terms");
+
+    expect(put.status).toBe(403);
+    expect(get.status).toBe(403);
+  });
+
+  it("copies none of the template's pseudonyms or 排除詞, and reset leaves none", async () => {
+    const userId = newGuest();
+    const guest = await verifiedGuest(userId);
+    const trial = await trialIdOf(userId);
+    await db.execute(
+      sql`insert into excluded_terms (workspace_id, term, created_by) values (${trial}, '好物輪轉', ${userId})`,
+    );
+
+    await guest.post("/api/trial/reset");
+
+    const names = workspaceTables().map((t) => getTableConfig(t).name);
+    expect(names).not.toContain("pseudonyms");
+    expect(names).not.toContain("excluded_terms");
+    expect(await rowsOf("pseudonyms", trial)).toBe(0);
+    expect(await rowsOf("excluded_terms", trial)).toBe(0);
+  });
+});
+
+async function trialIdOf(userId: string): Promise<string> {
+  const [trial] = await db
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .where(eq(workspaces.ownerId, userId));
+  return trial.id;
+}
+
+async function rowsOf(table: string, workspaceId: string): Promise<number> {
+  const { rows } = await db.execute<{ n: string }>(
+    sql`select count(*) n from ${sql.identifier(table)} where workspace_id = ${workspaceId}`,
+  );
+  return Number(rows[0].n);
+}

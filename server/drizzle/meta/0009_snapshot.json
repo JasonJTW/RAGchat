@@ -1,5 +1,5 @@
 {
-  "id": "23fa4632-0355-4a06-9381-128c07f02823",
+  "id": "d0d2cf0d-efc8-4705-9967-17522e500157",
   "prevId": "b6c64e8a-035a-49d9-8155-0e27c4618929",
   "version": "7",
   "dialect": "postgresql",
@@ -447,6 +447,67 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.excluded_terms": {
+      "name": "excluded_terms",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "term": {
+          "name": "term",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "excluded_terms_workspace_id_workspaces_id_fk": {
+          "name": "excluded_terms_workspace_id_workspaces_id_fk",
+          "tableFrom": "excluded_terms",
+          "tableTo": "workspaces",
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "excluded_terms_term": {
+          "name": "excluded_terms_term",
+          "nullsNotDistinct": false,
+          "columns": ["workspace_id", "term"]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.fact_entities": {
       "name": "fact_entities",
       "schema": "",
@@ -729,50 +790,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.guest_usage": {
-      "name": "guest_usage",
-      "schema": "",
-      "columns": {
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "day": {
-          "name": "day",
-          "type": "date",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "messages": {
-          "name": "messages",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "uploads": {
-          "name": "uploads",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {
-        "guest_usage_user_id_day_pk": {
-          "name": "guest_usage_user_id_day_pk",
-          "columns": ["user_id", "day"]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.proposal_items": {
       "name": "proposal_items",
       "schema": "",
@@ -982,6 +999,84 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.pseudonyms": {
+      "name": "pseudonyms",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "pseudonym": {
+          "name": "pseudonym",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "value_hash": {
+          "name": "value_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "value_cipher": {
+          "name": "value_cipher",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "pseudonyms_workspace_id_workspaces_id_fk": {
+          "name": "pseudonyms_workspace_id_workspaces_id_fk",
+          "tableFrom": "pseudonyms",
+          "tableTo": "workspaces",
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "pseudonyms_value": {
+          "name": "pseudonyms_value",
+          "nullsNotDistinct": false,
+          "columns": ["workspace_id", "value_hash"]
+        },
+        "pseudonyms_pseudonym": {
+          "name": "pseudonyms_pseudonym",
+          "nullsNotDistinct": false,
+          "columns": ["workspace_id", "pseudonym"]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -1219,36 +1314,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
-        },
-        "owner_id": {
-          "name": "owner_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_active_at": {
-          "name": "last_active_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "verified_until": {
-          "name": "verified_until",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "workspaces_owner_id_unique": {
-          "name": "workspaces_owner_id_unique",
-          "nullsNotDistinct": false,
-          "columns": ["owner_id"]
-        }
-      },
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -1278,7 +1349,7 @@
     "public.workspace_kind": {
       "name": "workspace_kind",
       "schema": "public",
-      "values": ["team", "guest", "demo"]
+      "values": ["team", "guest"]
     }
   },
   "schemas": {},

@@ -333,7 +333,9 @@ async function buildSeed(workspaceId: string) {
       DEMO_USER,
     );
     if (typeof confirmed !== "object" || !("items" in confirmed))
-      throw new Error(`the 示範資料 ${source.filename} was not confirmed`);
+      throw new Error(
+        `the 示範資料 ${source.filename} was not confirmed: ${JSON.stringify(confirmed)}`,
+      );
     const added = [
       ...(source.corrections ?? []).flatMap((c) =>
         c.kind === "supersede" ? [c] : [],
@@ -365,7 +367,7 @@ const factIdOf = (proposal: Proposal, content: string) =>
 
 /**
  * The tables a workspace's knowledge base lives in: those with a
- * `workspace_id`, but not conversations, which are a user's, not the seed.
+ * `workspace_id`, but not those of NOT_SEED.
  * Ordered so that a table comes after those it refers to.
  */
 export function workspaceTables(): PgTable[] {
@@ -378,8 +380,7 @@ export function workspaceTables(): PgTable[] {
     if (!UNSCOPED.includes(table) && !("workspaceId" in getTableColumns(table)))
       throw new Error(`${getTableName(table)} has no workspace_id`);
   const tables = all.filter(
-    (table) =>
-      !UNSCOPED.includes(table) && table !== (schema.conversations as PgTable),
+    (table) => !UNSCOPED.includes(table) && !NOT_SEED.includes(table),
   );
   const ordered: PgTable[] = [];
   const pending = [...tables];
@@ -397,6 +398,17 @@ export function workspaceTables(): PgTable[] {
 
 // The tables outside any workspace.
 const UNSCOPED: PgTable[] = [workspaces, schema.guestUsage];
+/**
+ * Workspace tables that are no part of the 示範資料, so never copied: a
+ * user's conversations, and de-identification's pseudonyms and 排除詞 (#34),
+ * which a trial never has: a 訪客's workspace, and the template, are not
+ * de-identified.
+ */
+export const NOT_SEED: PgTable[] = [
+  schema.conversations,
+  schema.pseudonyms,
+  schema.excludedTerms,
+];
 
 function referencedTables(table: PgTable): PgTable[] {
   return getTableConfig(table).foreignKeys.map(

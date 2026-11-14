@@ -1,7 +1,7 @@
 import { and, eq, getTableName, lt, sql } from "drizzle-orm";
 import { db } from "./db.js";
-import { conversations, guestUsage, workspaces } from "./db/schema.js";
-import { copyDemoSeed, workspaceTables } from "./demo-seed.js";
+import { guestUsage, workspaces } from "./db/schema.js";
+import { copyDemoSeed, NOT_SEED, workspaceTables } from "./demo-seed.js";
 
 // 試用工作區: each 訪客's own workspace, holding the 示範資料 until they change
 // it. A 訪客 gets it once they pass the human check (Turnstile), which then
@@ -94,9 +94,10 @@ export async function resetTrial(workspaceId: string): Promise<void> {
     await tx.execute(
       sql`select id from ${workspaces} where ${workspaces.id} = ${workspaceId} for update`,
     );
-    await tx
-      .delete(conversations)
-      .where(eq(conversations.workspaceId, workspaceId));
+    for (const table of NOT_SEED)
+      await tx.execute(
+        sql`delete from ${sql.identifier(getTableName(table))} where workspace_id = ${workspaceId}`,
+      );
     for (const table of workspaceTables().reverse())
       await tx.execute(
         sql`delete from ${sql.identifier(getTableName(table))} where workspace_id = ${workspaceId}`,

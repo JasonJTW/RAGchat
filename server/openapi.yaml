@@ -11,6 +11,17 @@ servers:
 # nobody is signed in, 403 (`code: verify`) for a 訪客 who has not passed
 # the human check today. A 訪客 is answered by GUEST_MODEL and held to the
 # trial's limits (429 / 413, see GuestLimit).
+#
+# De-identification (ADR-0004): in the team workspace every text a caller
+# sends (chat messages, files, inline edits) has its sensitive values (names,
+# organisations, phones, emails, addresses, ID and company numbers, amounts,
+# terms marked 敏感) replaced by pseudonyms like 〔人名3〕 before it reaches a
+# model or a table, and every response (chat stream included) has the real
+# values put back, so callers only ever see real values. An input holding a
+# password or an API key is refused and stores nothing. When de-identification
+# can't run (Presidio Analyzer down, PSEUDONYM_ENCRYPTION_KEY missing or
+# wrong) nothing is sent on: JSON routes answer 503. A 訪客's trial workspace
+# is not de-identified.
 security:
   - clerkSession: []
   - clerkBearer: []
@@ -144,10 +155,20 @@ paths:
         whole message: the reply is the text 「不支援的檔案格式：<names>…」
         and nothing is stored; so is a file over 5 MB or an input of over 100
         passages. A file without text (e.g. a scanned PDF) is answered
-        「<name>：無法抽出文字…」 with no proposal. Nothing enters the
+        「<name>：無法抽出文字…」 with no proposal. A file (name or text) that
+        holds a password or an API key refuses the whole message the same
+        way, with 「這則內容含有密碼或 API key…」. Nothing enters the
         knowledge base until a member confirms a proposal with
         `POST /api/proposals/{id}/confirm`; no reply of the chat writes to
         it, whatever the files say.
+
+        A latest message whose text holds a password or an API key is
+        answered 「這則內容含有密碼或 API key…」 and goes no further: no model
+        sees it, and a saved conversation keeps it as
+        「（已移除：這則訊息含有密碼或 API key）」 (so do earlier user messages
+        of the history that hold one, which are also blanked before the
+        agent sees them). When de-identification can't run, the reply is
+        「去識別服務暫時無法使用…」 and nothing is sent on or stored.
 
         A message that says something is not so, was changed, or no longer
         applies (e.g. 「R 不是取代率，是回收率」, 「…改成…」, 「…已經過時了」,
@@ -363,7 +384,8 @@ paths:
         items; at least one live item must stay ticked, and an expired item
         can't be excluded. A stopped (409) call unticks nothing.
         Items edited inline on the card are sent as `edits`: each such fact
-        takes the edited text (trimmed), embedded anew, and keeps the text
+        takes the edited text (trimmed, de-identified like any input; one
+        holding a secret answers 422), embedded anew, and keeps the text
         as extracted and the caller as its editor (`edited`). An edit whose
         text equals the item's changes nothing; a 過時 item adds no fact and
         can't be edited. Each fact a 取代 or 過時 item targets leaves the
@@ -480,6 +502,12 @@ paths:
                 $ref: "#/components/schemas/Error"
         "404":
           $ref: "#/components/responses/ProposalNotFound"
+        "422":
+          description: An edit holds a password or an API key; nothing was written
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "409":
           description: >
             The proposal was already decided or expired; or the knowledge
@@ -533,7 +561,9 @@ paths:
         Nothing enters the knowledge base until a member confirms a proposal;
         whatever a file says, it can only be proposed. A file without text
         (e.g. a scanned PDF) or without facts makes no proposal and is listed
-        in `skipped`. A refused request (415, 413) stores none of the files.
+        in `skipped`. A refused request (415, 413, 422, 503) stores none of
+        the files. Each file's name and text are de-identified before
+        anything else reads them.
       requestBody:
         required: true
         content:
@@ -599,6 +629,125 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "422":
+          description: >
+            A file holds a password or an API key (the error starts
+            「這則內容含有密碼或 API key」); none of the files were stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          $ref: "#/components/responses/DeidentificationUnavailable"
+  /api/terms:
+    get:
+      operationId: listTerms
+      summary: The terms marked sensitive and not sensitive
+      description: >
+        `sensitive` lists every value the workspace pseudonymises (those
+        found so far and those marked 敏感, oldest first) except the 排除詞;
+        `excluded` the terms marked not sensitive.
+      responses:
+        "200":
+          description: Both lists
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sensitive, excluded]
+                properties:
+                  sensitive:
+                    type: array
+                    items:
+                      type: string
+                  excluded:
+                    type: array
+                    items:
+                      type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NotForGuests"
+        "503":
+          $ref: "#/components/responses/DeidentificationUnavailable"
+    put:
+      operationId: markTerm
+      summary: Mark a term sensitive or not sensitive
+      description: >
+        `sensitive: true` gives the term a pseudonym (〔敏感詞N〕) and replaces
+        it in all later input; `false` makes it a 排除詞, never replaced in
+        later input even where it would be found. Either takes it off the
+        other list. Text stored before keeps what it had. The term goes in
+        the body, never the URL.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [term, sensitive]
+              properties:
+                term:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                  description: Trimmed
+                sensitive:
+                  type: boolean
+      responses:
+        "204":
+          description: Marked
+        "400":
+          description: A blank or overlong term, or no `sensitive` boolean
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NotForGuests"
+        "422":
+          description: The term holds a password or an API key; nothing stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          $ref: "#/components/responses/DeidentificationUnavailable"
+  /api/terms/excluded:
+    delete:
+      operationId: unmarkExcluded
+      summary: Take a term off the 排除詞 list
+      description: >
+        Detection decides about the term again. A term marked sensitive
+        can't be unmarked (its pseudonym stands in stored text); mark it not
+        sensitive instead.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [term]
+              properties:
+                term:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+      responses:
+        "204":
+          description: Taken off (also when it was not on the list)
+        "400":
+          description: A blank or overlong term
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/NotForGuests"
 components:
   securitySchemes:
     clerkSession:
@@ -618,6 +767,15 @@ components:
         type: string
         format: uuid
   responses:
+    DeidentificationUnavailable:
+      description: >
+        De-identification can't run now (Presidio Analyzer down, or
+        PSEUDONYM_ENCRYPTION_KEY missing or wrong); nothing was sent on or
+        stored
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
     ConversationNotFound:
       description: >
         No conversation with that id is the caller's (another 成員's, or
@@ -652,6 +810,14 @@ components:
         messages and files together reached GUEST_DAILY_CAP (default 1000)
         and guest trials are paused for the day (`code: paused`). Days are
         Asia/Taipei. `error` says so in Chinese, for the 訪客 to read.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotForGuests:
+      description: >
+        A 訪客 (whose trial workspace is not de-identified, so has no terms),
+        or a 訪客 who has not passed the human check today (`code: verify`)
       content:
         application/json:
           schema:

@@ -23,6 +23,10 @@ process.env.E2E_DATABASE_URL ??= (() => {
   return url.href;
 })();
 
+// The E2E server's own pseudonym key (ADR-0004), never the one in .env: its
+// database is new, so it has no pseudonyms another key could read.
+process.env.E2E_PSEUDONYM_KEY ??= randomBytes(32).toString("base64");
+
 function rootEnv(): Record<string, string | undefined> {
   try {
     return parseEnv(readFileSync(path.join(__dirname, "../.env"), "utf8"));
@@ -82,6 +86,11 @@ export default defineConfig({
         ...(process.env.LIVE
           ? {}
           : { AI_GATEWAY_API_KEY: "", JEV_API_KEY: "", STUB_MODELS: "1" }),
+        PSEUDONYM_ENCRYPTION_KEY: process.env.E2E_PSEUDONYM_KEY,
+        // De-identification finds values with the local analyzer (CI has no
+        // Presidio sidecar); live runs use the real one (`npm run
+        // presidio:up`, PRESIDIO_URL or :5002).
+        PII_ANALYZER: process.env.LIVE ? "" : "local",
       },
       url: `http://localhost:${SERVER_PORT}/health`,
       reuseExistingServer: false,
