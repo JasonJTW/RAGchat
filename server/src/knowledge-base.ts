@@ -875,10 +875,12 @@ async function relatedItems(
   at: number,
   sameEntity = false,
 ): Promise<Related[]> {
+  // Compared in SQL: timestamps hold microseconds, a JS Date milliseconds.
+  const madeAt = sql`(select created_at from proposals where id = ${proposal.id})`;
   const filter =
     which === "confirmed since"
-      ? sql`p.status = 'confirmed' and p.decided_at > ${proposal.createdAt}`
-      : sql`p.status = 'pending' and p.created_at < ${proposal.createdAt}`;
+      ? sql`p.status = 'confirmed' and p.decided_at > ${madeAt}`
+      : sql`p.status = 'pending' and p.created_at < ${madeAt}`;
   const { rows } = await tx.execute<{
     mine_id: string;
     id: string;

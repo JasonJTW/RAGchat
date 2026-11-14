@@ -1,5 +1,7 @@
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sql } from "drizzle-orm";
+import { db } from "./db.js";
 import { type Proposal, propose, searchFacts } from "./knowledge-base.js";
 import { installStubModels } from "./stub-models.js";
 import { createWorkspace, type Caller } from "./workspaces.js";
@@ -249,6 +251,27 @@ describe("confirming after the knowledge base changed", () => {
       });
       expect((await confirm(replace.id)).status).toBe(200);
       const note = await proposeFacts("member-b", BY_WEIGHT);
+
+      const res = await confirm(note.id);
+
+      expect(res.status).toBe(200);
+    });
+
+    it("tells a change confirmed microseconds before it was made from one after", async () => {
+      const taken = await confirmed(TAKEN);
+      const note = await proposeFacts("member-b", BY_WEIGHT);
+      const replace = await proposeCorrection("member-a", taken, {
+        content: RECYCLED,
+      });
+      await confirm(replace.id);
+      // As if the replacement was confirmed 56 µs before the note was made,
+      // within the same millisecond (both after everything else here).
+      await db.execute(
+        sql`update proposals set created_at = '2099-01-01 00:00:00.123456+00' where id = ${note.id}`,
+      );
+      await db.execute(
+        sql`update proposals set decided_at = '2099-01-01 00:00:00.123400+00' where id = ${replace.id}`,
+      );
 
       const res = await confirm(note.id);
 
