@@ -160,6 +160,15 @@ describe("displayNames with Clerk", () => {
     });
   });
 
+  it("looks a user Clerk had no record of up again next time", async () => {
+    expect(await displayNames(["user_late"])).toEqual({
+      user_late: "（已刪除的使用者）",
+    });
+    clerk.users.set("user_late", { username: "late" });
+
+    expect(await displayNames(["user_late"])).toEqual({ user_late: "late" });
+  });
+
   it("falls back to the ids while Clerk can't be reached", async () => {
     clerk.down = true;
     vi.spyOn(console, "error").mockImplementation(() => {});

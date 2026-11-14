@@ -50,6 +50,7 @@
     "drizzle-kit": "^0.31.11",
     "eslint": "^9.39.5",
     "globals": "^17.13.0",
+    "jszip": "^3.10.2",
     "supertest": "^7.3.1",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",

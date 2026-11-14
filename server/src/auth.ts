@@ -89,9 +89,20 @@ async function isMember(
   return member;
 }
 
-// Names are looked up at Clerk and kept for ten minutes.
+// Names are looked up at Clerk and kept for ten minutes, at most this many
+// (the oldest dropped first); a user Clerk has no record of is not kept.
 const NAME_TTL_MS = 10 * 60_000;
+const MAX_NAMES = 1000;
 const names = new Map<string, { name: string; until: number }>();
+
+function keepName(id: string, name: string, until: number) {
+  names.delete(id);
+  names.set(id, { name, until });
+  for (const oldest of names.keys()) {
+    if (names.size <= MAX_NAMES) break;
+    names.delete(oldest);
+  }
+}
 
 /**
  * What to show for each user id (who proposed, confirmed or edited): the
@@ -110,7 +121,10 @@ export async function displayNames(
     if (!id.startsWith("user_")) out[id] = id;
     else if (stubAuth()) out[id] = id.slice("user_".length);
     else if (cached && cached.until > now) out[id] = cached.name;
-    else ask.push(id);
+    else {
+      names.delete(id);
+      ask.push(id);
+    }
   }
   if (!ask.length) return out;
   if (!process.env.CLERK_SECRET_KEY) {
@@ -125,9 +139,8 @@ export async function displayNames(
     const found = new Map(data.map((user) => [user.id, user]));
     for (const id of ask) {
       const user = found.get(id);
-      const name = user ? nameOf(user) : "（已刪除的使用者）";
-      names.set(id, { name, until: now + NAME_TTL_MS });
-      out[id] = name;
+      if (user) keepName(id, nameOf(user), now + NAME_TTL_MS);
+      out[id] = user ? nameOf(user) : "（已刪除的使用者）";
     }
   } catch (error) {
     console.error("display names unavailable:", error);

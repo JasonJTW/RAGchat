@@ -37,3 +37,24 @@ it("shows 成員 when the name can't be read", async () => {
 
   expect(await screen.findByText("成員")).toBeInTheDocument();
 });
+
+it("asks for every name shown at once in one request", async () => {
+  const fetch = vi.fn((url: string) => {
+    const ids = new URL(url, "http://x").searchParams.get("ids")!.split(",");
+    return Promise.resolve(
+      Response.json(Object.fromEntries(ids.map((id) => [id, `名${id}`]))),
+    );
+  });
+  vi.stubGlobal("fetch", fetch);
+
+  fresh(
+    <p>
+      <Person id="user_a" />、<Person id="user_b" />、<Person id="user_c" />
+    </p>,
+  );
+
+  expect(
+    await screen.findByText("名user_a、名user_b、名user_c"),
+  ).toBeInTheDocument();
+  expect(fetch).toHaveBeenCalledOnce();
+});
