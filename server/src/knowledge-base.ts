@@ -6,6 +6,7 @@ import {
   gt,
   gte,
   inArray,
+  isNotNull,
   isNull,
   lt,
   or,
@@ -1383,8 +1384,10 @@ export async function searchKeyword(
 }
 
 /**
- * The time lane: of the facts that held in the period, those that began or
- * ended in it (what changed then), most similar to the query first.
+ * The time lane: of the facts that held in the period, first those that
+ * have since ended (replaced or 過時: what the period knew that is no
+ * longer so), then those that began or ended in it (what changed then);
+ * each group most similar to the query first.
  */
 export async function searchChanges(
   workspaceId: string,
@@ -1396,15 +1399,27 @@ export async function searchChanges(
   const { vector } = await asQuestion(query);
   const within = (column: typeof facts.validFrom | typeof facts.validTo) =>
     and(gte(column, during.from), lt(column, during.to));
-  return factMatches(
-    workspaceId,
-    vector,
-    and(
-      eq(facts.embeddingModel, model.model),
-      or(within(facts.validFrom), within(facts.validTo)),
+  const sameModel = eq(facts.embeddingModel, model.model);
+  const [ended, changed] = await Promise.all([
+    factMatches(
+      workspaceId,
+      vector,
+      and(sameModel, isNotNull(facts.validTo)),
+      limit,
+      during,
     ),
+    factMatches(
+      workspaceId,
+      vector,
+      and(sameModel, or(within(facts.validFrom), within(facts.validTo))),
+      limit,
+      during,
+    ),
+  ]);
+  const seen = new Set(ended.map((fact) => fact.id));
+  return [...ended, ...changed.filter((fact) => !seen.has(fact.id))].slice(
+    0,
     limit,
-    during,
   );
 }
 

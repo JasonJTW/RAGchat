@@ -59,6 +59,8 @@ export interface KnowledgeRetrieverInput extends BaseRetrieverInput {
 // Facts each lane offers before fusion, and the RRF constant.
 const CANDIDATES = 20;
 const RRF_K = 60;
+// For a past period, how many since-ended facts the top k always holds.
+const ENDED_KEPT = 2;
 // A name or code in Latin script: two or more letters, digits and joiners
 // with a letter among them (「EF-07」「CSV」「PR #128」 gives PR).
 const TERM = /[A-Za-z0-9][\w.-]*[A-Za-z0-9]/g;
@@ -143,11 +145,25 @@ export class KnowledgeRetriever extends BaseRetriever<RetrievedFact> {
         }
         fused.set(match.id, fact);
       });
-    return [...fused.values()]
-      .sort((a, b) => b.score - a.score)
-      .slice(0, this.k)
-      .map(
-        (fact) => new Document({ pageContent: fact.content, metadata: fact }),
-      );
+    const ranked = [...fused.values()].sort((a, b) => b.score - a.score);
+    const top = ranked.slice(0, this.k);
+    // For a past period, up to two facts that held then and have since
+    // ended are kept, so the answer can say what changed afterwards.
+    if (during) {
+      const ended = ranked.filter((fact) => fact.validTo);
+      const missing = ended
+        .slice(0, ENDED_KEPT)
+        .filter((fact) => !top.includes(fact));
+      for (const fact of missing) {
+        let at = top.length - 1;
+        while (at >= 0 && top[at].validTo) at--;
+        if (at < 0) break;
+        top.splice(at, 1);
+        top.push(fact);
+      }
+    }
+    return top.map(
+      (fact) => new Document({ pageContent: fact.content, metadata: fact }),
+    );
   }
 }

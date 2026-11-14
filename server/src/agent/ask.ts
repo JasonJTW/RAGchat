@@ -222,11 +222,16 @@ export async function retrieve(
     }),
   );
   // Passages keep their fused (vector + keyword) order; each fact goes
-  // before the first passage it matches better than.
+  // before the first passage it matches better than. For a past period all
+  // facts go first: they carry their dates and what changed afterwards, a
+  // passage doesn't.
   const merged: typeof scored = [];
   let f = 0;
   for (const passage of passages) {
-    while (f < scored.length && scored[f].similarity > passage.similarity)
+    while (
+      f < scored.length &&
+      (period || scored[f].similarity > passage.similarity)
+    )
       merged.push(scored[f++]);
     merged.push({
       similarity: passage.similarity,

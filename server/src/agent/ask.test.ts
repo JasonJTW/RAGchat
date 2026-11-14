@@ -241,6 +241,32 @@ describe("retrieve at a past time", () => {
     expect(evidence.map((e) => e.text.split("\n")[0])).toEqual([V1]);
   });
 
+  it("puts the facts before the passages, which carry no history", async () => {
+    const { vectors } = installStubModels();
+    const question = "三月時我們的避免排放公式是什麼？";
+    const passage = "# 公式\n\nA = W × EF × R";
+    vectors.set(question, [1, 0]);
+    vectors.set(`wiki.md › 公式\n\n${"A = W × EF × R"}`, [1, 0]);
+    vectors.set(V1, [0.6, 0.8]);
+    const workspaceId = await createWorkspace("guest", "test");
+    const proposal = await propose(workspaceId, "user-a", {
+      source: { kind: "file", filename: "wiki.md", content: passage },
+      chunks: [
+        {
+          path: ["wiki.md", "公式"],
+          content: "A = W × EF × R",
+          embedText: `wiki.md › 公式\n\n${"A = W × EF × R"}`,
+        },
+      ],
+      facts: [{ content: V1, chunk: 0, validFrom: at("2026-03-02") }],
+    });
+    await confirmProposal(workspaceId, proposal.id, "user-b");
+
+    const { evidence } = await retrieve(ask(workspaceId, question));
+
+    expect(evidence.map((e) => e.kind)).toEqual(["fact", "passage"]);
+  });
+
   it("draws on no 待確認 fact for a past time", async () => {
     installStubModels();
     const workspaceId = await createWorkspace("guest", "test");

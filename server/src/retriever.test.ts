@@ -103,6 +103,31 @@ describe("KnowledgeRetriever", () => {
     expect(v1.history?.map((h) => h.content)).toEqual([V1, V2]);
   });
 
+  it("brings in a past period's fact that has since been replaced, however many facts of then are closer", async () => {
+    const { vectors } = installStubModels();
+    const question = "三月時我們的避免排放公式是什麼？";
+    vectors.set(question, [1, 0, 0]);
+    vectors.set(V1, [0.2, 1, 0]);
+    vectors.set(V2, [0.2, 1, 0]);
+    vectors.set(R, [0, 0, 1]);
+    const closer = Array.from(
+      { length: 12 },
+      (_, i) => `我們三月時的避免排放公式備註 ${i}`,
+    );
+    closer.forEach((c, i) => vectors.set(c, [1, 0, 0.01 * i]));
+    const workspaceId = await demoWorkspace();
+    await confirmed(
+      workspaceId,
+      closer.map((content) => ({ content, validFrom: taipei("2026-03-01") })),
+    );
+
+    const facts = await retrieved(workspaceId, question);
+
+    expect(facts).toHaveLength(6);
+    const v1 = facts.find((f) => f.content === V1);
+    expect(v1?.history?.map((h) => h.content)).toEqual([V1, V2]);
+  });
+
   it("ranks first, in a time lane, the facts that began or ended in that time", async () => {
     const { vectors } = installStubModels();
     const question = "五月時 R 是多少？";
