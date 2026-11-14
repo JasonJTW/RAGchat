@@ -14,6 +14,42 @@ const VERIFIED_FOR = "24 hours";
 /** A trial with no request for this long is deleted. */
 const IDLE_FOR = "7 days";
 
+/** What a caller of a role may do, and how it is served. */
+export interface RolePolicy {
+  /** What they may use per day; null: no limits. */
+  limits: typeof GUEST_LIMITS | null;
+  /** The model purpose every call of theirs uses; undefined: each its own. */
+  purpose: "guest" | undefined;
+  /** Whether they work in a 試用工作區 of their own (verify, reset). */
+  trial: boolean;
+  /** Whether their input is de-identified (ADR-0004). */
+  deidentified: boolean;
+}
+
+/**
+ * The one place a 訪客 differs from a 成員: a 訪客 is held to the trial's
+ * limits, answered by GUEST_MODEL, works in a 試用工作區 they may reset, and
+ * is never de-identified (it holds no real data).
+ */
+export function policyOf(role: "member" | "guest"): RolePolicy {
+  return role === "guest"
+    ? {
+        limits: GUEST_LIMITS,
+        purpose: "guest",
+        trial: true,
+        deidentified: false,
+      }
+    : { limits: null, purpose: undefined, trial: false, deidentified: true };
+}
+
+/**
+ * Whether a workspace of the kind is de-identified: the team's only; a
+ * 訪客's trial and the 示範資料 template hold no real data.
+ */
+export function deidentifies(kind: "team" | "guest" | "demo"): boolean {
+  return kind === "team";
+}
+
 /** What one 訪客 may use per day, and the largest file they may upload. */
 export const GUEST_LIMITS = {
   messages: 30,

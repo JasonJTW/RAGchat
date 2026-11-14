@@ -2,7 +2,7 @@ import { asc, eq, sql } from "drizzle-orm";
 import type { Request } from "express";
 import { identify } from "./auth.js";
 import { db } from "./db.js";
-import { trialOf } from "./trial.js";
+import { policyOf, trialOf } from "./trial.js";
 import { workspaces } from "./db/schema.js";
 
 // Who is calling and in which 工作區. A 成員 works in the team workspace; a
@@ -12,8 +12,8 @@ import { workspaces } from "./db/schema.js";
 export interface Caller {
   workspaceId: string;
   userId: string;
-  /** A 訪客 is held to the trial's limits and answered by GUEST_MODEL. */
-  role?: "member" | "guest";
+  /** What the caller may do follows from it (trial.ts `policyOf`). */
+  role: "member" | "guest";
 }
 
 /**
@@ -26,7 +26,7 @@ export async function callerOf(
   const identity = await identify(req);
   if (!identity) return "signed out";
   const { userId, role } = identity;
-  if (role === "member")
+  if (!policyOf(role).trial)
     return { workspaceId: await teamWorkspace(), userId, role };
   const trial = await trialOf(userId);
   if (trial === "unverified") return trial;

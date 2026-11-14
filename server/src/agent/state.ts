@@ -6,6 +6,7 @@ import type { Skipped, Upload } from "./input.js";
 import type { CorrectionDraft } from "./correct.js";
 import type { ModelPurpose } from "../models.js";
 import type { Caller } from "../workspaces.js";
+import { policyOf } from "../trial.js";
 
 /** What a message asks of the agent. */
 export type Intent = "ask" | "input" | "correct";
@@ -86,5 +87,5 @@ export function purposeOf(
   state: { role?: Caller["role"] },
   purpose: ModelPurpose,
 ): ModelPurpose {
-  return state.role === "guest" ? "guest" : purpose;
+  return (state.role && policyOf(state.role).purpose) ?? purpose;
 }

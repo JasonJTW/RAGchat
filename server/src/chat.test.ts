@@ -25,6 +25,7 @@ beforeEach(async () => {
   caller.current = {
     workspaceId: await createWorkspace("guest", "chat test"),
     userId: "user_member",
+    role: "member",
   };
 });
 
@@ -40,9 +41,12 @@ async function startServerWithUpload() {
   const { confirmProposal } = await import("./knowledge-base.js");
   const name = "05-projects-and-practice.md";
   const { workspaceId, userId } = caller.current;
-  const { proposals } = await inputFiles(workspaceId, userId, [
-    { filename: name, bytes: readFileSync(path.join(FIXTURES, name)) },
-  ]);
+  const { proposals } = await inputFiles(
+    workspaceId,
+    userId,
+    [{ filename: name, bytes: readFileSync(path.join(FIXTURES, name)) }],
+    "member",
+  );
   await confirmProposal(workspaceId, proposals[0].id, userId);
   return app;
 }

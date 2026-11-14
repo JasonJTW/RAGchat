@@ -25,7 +25,7 @@ let workspaceId: string;
 let vectors: Map<string, number[]>;
 
 function as(userId: string) {
-  caller.current = { workspaceId, userId };
+  caller.current = { workspaceId, userId, role: "member" };
 }
 
 function proposeFacts(userId: string, ...texts: string[]) {

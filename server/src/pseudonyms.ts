@@ -9,6 +9,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "./db.js";
 import { excludedTerms, pseudonyms, workspaces } from "./db/schema.js";
 import { piiAnalyzer } from "./pii-analyzer.js";
+import { deidentifies } from "./trial.js";
 
 // 去識別 (ADR-0004). Before any text reaches a model, an embedding or a
 // table, each sensitive value in it is replaced by its pseudonym (〔人名3〕),
@@ -424,9 +425,8 @@ function isGuest(workspaceId: string): Promise<boolean> {
       .select({ kind: workspaces.kind })
       .from(workspaces)
       .where(eq(workspaces.id, workspaceId))
-      // A 訪客's trial and the 示範資料 template (demo-seed.ts) hold no real
-      // data and are not de-identified.
-      .then(([row]) => row?.kind === "guest" || row?.kind === "demo");
+      // An unknown workspace is de-identified, to be safe.
+      .then(([row]) => !deidentifies(row?.kind ?? "team"));
     guest.catch(() => kinds.delete(workspaceId));
     kinds.set(workspaceId, guest);
   }

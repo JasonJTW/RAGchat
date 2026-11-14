@@ -27,7 +27,7 @@ const { app } = await import("./app.js");
 let workspaceId: string;
 
 function as(userId: string) {
-  caller.current = { workspaceId, userId };
+  caller.current = { workspaceId, userId, role: "member" };
 }
 
 beforeEach(async () => {
@@ -147,6 +147,7 @@ describe("deleting a 來源", () => {
     caller.current = {
       workspaceId: await createWorkspace("guest", "other"),
       userId: "member-a",
+      role: "member",
     };
     const elsewhere = await remove(card.sourceId);
     const unknown = await remove("not-a-uuid");

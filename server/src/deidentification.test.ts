@@ -37,6 +37,7 @@ beforeEach(async () => {
   caller.current = {
     workspaceId: await createWorkspace("team", "test"),
     userId: "member-a",
+    role: "member",
   };
 });
 
@@ -384,6 +385,7 @@ describe("a guest workspace", () => {
     caller.current = {
       workspaceId: await createWorkspace("guest", "trial"),
       userId: "guest-a",
+      role: "guest",
     };
     await say(INPUT);
     expect(await dump()).toContain("王小明先生負責倉庫盤點");

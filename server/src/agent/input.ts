@@ -578,7 +578,7 @@ export async function inputFiles(
   workspaceId: string,
   userId: string,
   files: Upload[],
-  role?: Caller["role"],
+  role: Caller["role"],
 ): Promise<{ refusal?: Refusal; proposals: Proposal[]; skipped: Skipped[] }> {
   const out = await inputGraph.invoke({
     workspaceId,

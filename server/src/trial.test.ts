@@ -14,7 +14,12 @@ import { stubSession } from "./stub-auth.js";
 import { db } from "./db.js";
 import { workspaces } from "./db/schema.js";
 import { workspaceTables } from "./demo-seed.js";
-import { deleteIdleTrials } from "./trial.js";
+import {
+  deidentifies,
+  deleteIdleTrials,
+  GUEST_LIMITS,
+  policyOf,
+} from "./trial.js";
 
 // 訪客試用 through the HTTP API, signed in by stub cookies. Each test signs in
 // as new 訪客 (a random user id), so each gets a trial workspace of its own.
@@ -434,6 +439,32 @@ describe("GET /api/trial/example", () => {
 
     expect(res.status).toBe(200);
     expect(res.text).toContain("A = W × EF × R × L − T");
+  });
+});
+
+describe("what a role may do", () => {
+  it("holds a 訪客 to the trial: limits, GUEST_MODEL, a trial to reset, no de-identification", () => {
+    expect(policyOf("guest")).toEqual({
+      limits: GUEST_LIMITS,
+      purpose: "guest",
+      trial: true,
+      deidentified: false,
+    });
+  });
+
+  it("leaves a 成員 unlimited, de-identified, with each purpose's own model", () => {
+    expect(policyOf("member")).toEqual({
+      limits: null,
+      purpose: undefined,
+      trial: false,
+      deidentified: true,
+    });
+  });
+
+  it("de-identifies the team workspace only", () => {
+    expect(deidentifies("team")).toBe(true);
+    expect(deidentifies("guest")).toBe(false);
+    expect(deidentifies("demo")).toBe(false);
   });
 });
 

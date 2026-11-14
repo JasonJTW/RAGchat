@@ -76,6 +76,7 @@ beforeEach(async () => {
   caller.current = {
     workspaceId: await createWorkspace("guest", "test"),
     userId: "member-a",
+    role: "member",
   };
 });
 
@@ -138,6 +139,7 @@ describe("POST /api/proposals/:id/confirm", () => {
     caller.current = {
       workspaceId: await createWorkspace("guest", "other"),
       userId: "member-b",
+      role: "member",
     };
 
     const other = await request(app).post(

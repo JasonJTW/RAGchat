@@ -44,7 +44,7 @@ const entity = (proposal: Proposal, name: string) =>
 beforeEach(async () => {
   installStubModels();
   workspaceId = await createWorkspace("guest", "test");
-  caller.current = { workspaceId, userId: "member-b" };
+  caller.current = { workspaceId, userId: "member-b", role: "member" };
 });
 
 describe("confirming with a new entity relinked", () => {

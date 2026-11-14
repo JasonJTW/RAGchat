@@ -28,6 +28,7 @@ import {
 import { passesTurnstile } from "./turnstile.js";
 import {
   GUEST_LIMITS,
+  policyOf,
   type Refusal,
   resetTrial,
   trialOf,
@@ -76,7 +77,7 @@ app.get("/api/me", async (req, res) => {
     res.status(401).json({ error: "sign in first" });
     return;
   }
-  if (identity.role === "member") {
+  if (!policyOf(identity.role).trial) {
     res.json(identity);
     return;
   }
@@ -94,7 +95,7 @@ app.post("/api/trial/verify", async (req, res) => {
     res.status(401).json({ error: "sign in first" });
     return;
   }
-  if (identity.role !== "guest") {
+  if (!policyOf(identity.role).trial) {
     res.status(403).json({ error: "only a 訪客 has a trial workspace" });
     return;
   }
@@ -179,10 +180,9 @@ async function withinLimits(
   messages: number,
 ): Promise<boolean> {
   const { role, userId } = callerIn(res);
-  if (role !== "guest") return true;
-  const refusal = files.some(
-    (file) => file.bytes.length > GUEST_LIMITS.fileBytes,
-  )
+  const { limits } = policyOf(role);
+  if (!limits) return true;
+  const refusal = files.some((file) => file.bytes.length > limits.fileBytes)
     ? "file size"
     : await useAllowance(userId, { messages, uploads: files.length });
   if (refusal === "ok") return true;
@@ -194,7 +194,7 @@ async function withinLimits(
 // Puts the 訪客's 試用工作區 back to the 示範資料.
 app.post("/api/trial/reset", async (_req, res) => {
   const { role, workspaceId } = callerIn(res);
-  if (role !== "guest") {
+  if (!policyOf(role).trial) {
     res
       .status(403)
       .json({ error: "only a 訪客's trial workspace can be reset" });
@@ -445,7 +445,7 @@ const TermBody = z.object({ term: z.string().trim().min(1).max(100) });
 
 // A 訪客's trial is never de-identified (ADR-0004), so it has no lists.
 app.use("/api/terms", (_req, res, next) => {
-  if (callerIn(res).role === "guest") {
+  if (!policyOf(callerIn(res).role).deidentified) {
     res.status(403).json({
       error: "a trial workspace is not de-identified; it has no terms",
     });

@@ -57,6 +57,7 @@ beforeEach(async () => {
   caller.current = {
     workspaceId: await createWorkspace("guest", "test"),
     userId: "member-a",
+    role: "member",
   };
 });
 
@@ -369,6 +370,7 @@ describe("a file's passages", () => {
     caller.current = {
       workspaceId: await createWorkspace("guest", "other"),
       userId: "member-b",
+      role: "member",
     };
 
     expect(citationsOf(await chat(QUESTION))).toEqual([]);

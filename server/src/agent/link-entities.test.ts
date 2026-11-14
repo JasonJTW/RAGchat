@@ -124,12 +124,17 @@ describe("the 輸入 subgraph", () => {
     const algorithm = first.entities.find((e) => e.name === "避免排放算法")!;
     const kobayashi = first.entities.find((e) => e.name === "小林")!;
 
-    const { proposals } = await inputFiles(workspaceId, "user-a", [
-      {
-        filename: "notes.txt",
-        bytes: Buffer.from("「減碳計算模型」由「小林」維護"),
-      },
-    ]);
+    const { proposals } = await inputFiles(
+      workspaceId,
+      "user-a",
+      [
+        {
+          filename: "notes.txt",
+          bytes: Buffer.from("「減碳計算模型」由「小林」維護"),
+        },
+      ],
+      "member",
+    );
 
     const [card] = proposals;
     const model = card.entities.find((e) => e.name === "減碳計算模型")!;

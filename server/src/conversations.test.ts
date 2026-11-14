@@ -53,7 +53,7 @@ const textOf = (message: Message) =>
 
 let workspaceId: string;
 const as = (userId: string) => {
-  caller.current = { workspaceId, userId };
+  caller.current = { workspaceId, userId, role: "member" };
 };
 
 beforeEach(async () => {
